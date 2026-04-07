@@ -141,6 +141,7 @@ export const mockEmployees: Employee[] = [
     contractHours: 35,
     notes: 'Référente équipe. Préfère les horaires du matin.',
     isActive: true,
+    inactiveMonths: [],
     createdAt: '2023-01-15',
   },
   {
@@ -156,6 +157,7 @@ export const mockEmployees: Employee[] = [
     contractHours: 39,
     notes: 'Disponible le samedi. Allergique aux arachides.',
     isActive: true,
+    inactiveMonths: [],
     createdAt: '2023-03-10',
   },
   {
@@ -171,6 +173,7 @@ export const mockEmployees: Employee[] = [
     contractHours: 24,
     notes: 'Disponible uniquement en soirée les jours de semaine.',
     isActive: true,
+    inactiveMonths: [],
     createdAt: '2023-05-20',
   },
   {
@@ -186,6 +189,7 @@ export const mockEmployees: Employee[] = [
     contractHours: 35,
     notes: 'Maîtrise la mixologie. Formation cocktail en cours.',
     isActive: true,
+    inactiveMonths: [],
     createdAt: '2023-02-01',
   },
   {
@@ -201,6 +205,7 @@ export const mockEmployees: Employee[] = [
     contractHours: 39,
     notes: 'Spécialiste pâtisserie. Ne travaille pas le week-end.',
     isActive: true,
+    inactiveMonths: [],
     createdAt: '2022-11-15',
   },
   {
@@ -216,6 +221,7 @@ export const mockEmployees: Employee[] = [
     contractHours: 20,
     notes: 'Étudiant. Disponible surtout en soirée.',
     isActive: true,
+    inactiveMonths: [],
     createdAt: '2024-01-08',
   },
   {
@@ -231,6 +237,7 @@ export const mockEmployees: Employee[] = [
     contractHours: 35,
     notes: 'Accès caisse principale. Référente administratif.',
     isActive: true,
+    inactiveMonths: [],
     createdAt: '2022-08-22',
   },
   {
@@ -246,6 +253,7 @@ export const mockEmployees: Employee[] = [
     contractHours: 39,
     notes: 'Polyvalent. Disponible 7j/7.',
     isActive: true,
+    inactiveMonths: [],
     createdAt: '2023-06-01',
   },
   {
@@ -261,6 +269,7 @@ export const mockEmployees: Employee[] = [
     contractHours: 16,
     notes: 'Travaille en extra le week-end.',
     isActive: true,
+    inactiveMonths: [],
     createdAt: '2024-03-15',
   },
 ];
