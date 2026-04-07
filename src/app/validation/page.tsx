@@ -116,7 +116,6 @@ export default function ValidationPage() {
       <Header
         title="Validation des mois"
         subtitle="Consultez, validez et verrouillez les mois passés"
-        icon={<ShieldCheck className="h-5 w-5" />}
       />
 
       <div className="flex-1 p-6 flex gap-6">
