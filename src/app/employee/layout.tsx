@@ -14,6 +14,13 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
   const [employeeName, setEmployeeName] = useState('');
   const [initials, setInitials] = useState('?');
 
+  // Enregistrement du Service Worker pour la PWA
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  }, []);
+
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getUser().then(async ({ data }) => {
