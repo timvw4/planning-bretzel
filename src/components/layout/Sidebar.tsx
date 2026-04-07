@@ -177,28 +177,38 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             </ul>
           </div>
         ))}
-      </nav>
 
-      {/* Footer */}
-      <div className={cn('border-t border-slate-100', collapsed ? 'px-2 py-3' : 'px-4 py-4 space-y-2')}>
-        <button
-          onClick={handleLogout}
-          title={collapsed ? 'Se déconnecter' : undefined}
+        {/* Déconnexion — sous Configuration, dans le menu défilant */}
+        <div
           className={cn(
-            'w-full flex items-center rounded-lg text-sm font-medium text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors group',
-            collapsed ? 'justify-center px-0 py-2.5' : 'gap-2.5 px-3 py-2'
+            'border-t border-slate-100 mt-2 pt-3',
+            collapsed ? 'mx-2' : 'mx-1'
           )}
         >
-          <LogOut className="w-4 h-4 text-slate-400 group-hover:text-red-500 transition-colors shrink-0" />
-          {!collapsed && 'Se déconnecter'}
-        </button>
-        {!collapsed && (
+          <button
+            type="button"
+            onClick={handleLogout}
+            title={collapsed ? 'Se déconnecter' : undefined}
+            className={cn(
+              'w-full flex items-center rounded-lg text-sm font-medium text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors group',
+              collapsed ? 'justify-center px-0 py-2.5' : 'gap-2.5 px-3 py-2'
+            )}
+          >
+            <LogOut className="w-4 h-4 text-slate-400 group-hover:text-red-500 transition-colors shrink-0" />
+            {!collapsed && 'Se déconnecter'}
+          </button>
+        </div>
+      </nav>
+
+      {/* Pied de page — version / crédits (masqué si sidebar réduite) */}
+      {!collapsed && (
+        <div className="border-t border-slate-100 px-4 py-4">
           <div className="rounded-lg bg-indigo-50 p-3">
-            <p className="text-xs font-semibold text-indigo-700">Planning </p>
-            <p className="text-xs text-indigo-500 mt-0.5">© 2026 - Boulangerie Bretzel</p>
+            <p className="text-xs font-semibold text-indigo-700">Boulangerie Bretzel</p>
+            <p className="text-xs text-indigo-500 mt-0.5">© 2026 - version 0.1</p>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Bouton toggle — coin bas droit de la sidebar */}
       <button

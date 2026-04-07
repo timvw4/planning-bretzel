@@ -302,7 +302,7 @@ export default function DashboardPage() {
                 icon={Activity}
                 label="Absences semaine"
                 value={stats.weekAbsences}
-                sub="Congés + maladies"
+                sub="Congés + arrêts"
                 color="bg-amber-50 text-amber-600"
                 trend={stats.weekAbsences > 3 ? { value: 'Élevé', positive: false } : undefined}
               />
@@ -457,7 +457,7 @@ export default function DashboardPage() {
                 icon={Activity}
                 label="Absences ce mois"
                 value={stats.monthAbsences}
-                sub="Congés + maladies"
+                sub="Congés + Arrêts"
                 color="bg-amber-50 text-amber-600"
                 trend={stats.monthAbsences > 10 ? { value: 'Élevé', positive: false } : undefined}
               />

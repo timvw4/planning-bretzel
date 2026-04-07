@@ -67,7 +67,7 @@ const PRESET_COLORS = [
   { bg: '#FED7AA', text: '#C2410C' },   // Orange
   { bg: '#FEF08A', text: '#854D0E' },   // Jaune
   { bg: '#F1F5F9', text: '#475569' },   // Gris
-  { bg: '#1E293B', text: '#CBD5E1' },   // Noir
+  { bg: '#1E293B', text: '#F8FAFC' },   // Noir (texte clair lisible sur fond sombre)
   { bg: '#FEF3C7', text: '#92400E' },   // Brun
   { bg: '#FDF6EC', text: '#A16207' },   // Beige
 ];

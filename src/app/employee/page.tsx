@@ -122,14 +122,17 @@ export default function EmployeeSchedulePage() {
       {/* Prochain shift */}
       {nextEntry && (
         <div
-          className="rounded-2xl p-4 border flex items-center gap-4"
+          className="rounded-2xl p-4 border flex items-start gap-3"
           style={{ backgroundColor: nextEntry.shift.color, borderColor: nextEntry.shift.color }}
         >
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold shrink-0"
-            style={{ backgroundColor: nextEntry.shift.textColor + '22', color: nextEntry.shift.textColor }}>
-            {nextEntry.shift.shortName}
+          <div
+            className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 opacity-90"
+            style={{ backgroundColor: nextEntry.shift.textColor + '22', color: nextEntry.shift.textColor }}
+            aria-hidden
+          >
+            <Clock className="w-5 h-5" />
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold opacity-70" style={{ color: nextEntry.shift.textColor }}>
               Prochain shift
             </p>
@@ -220,6 +223,13 @@ export default function EmployeeSchedulePage() {
               const entry = entryMap.get(dateStr);
               const isCurrentDay = isToday(day);
               const isWeekend = getDay(day) === 0 || getDay(day) === 6;
+              const shift = entry?.shift;
+              const showWorkTimesOnly =
+                shift &&
+                shift.type === 'work' &&
+                shift.startTime &&
+                shift.endTime &&
+                !(shift.startTime === '00:00' && shift.endTime === '00:00');
 
               return (
                 <div
@@ -244,15 +254,16 @@ export default function EmployeeSchedulePage() {
                   {/* Badge du shift */}
                   {entry && (
                     <div
-                      className="rounded-lg px-1.5 py-1 flex-1 flex flex-col justify-center min-h-0"
+                      className="rounded-lg px-1 py-1 flex-1 flex flex-col items-center justify-center min-h-0 text-center gap-0.5"
                       style={{ backgroundColor: entry.shift.color, color: entry.shift.textColor }}
                     >
-                      <span className="text-[11px] font-bold leading-tight truncate">
-                        {entry.shift.shortName}
-                      </span>
-                      {entry.shift.type === 'work' && entry.shift.startTime && (
-                        <span className="text-[9px] opacity-75 leading-tight mt-0.5">
+                      {showWorkTimesOnly ? (
+                        <span className="text-[10px] font-semibold leading-tight">
                           {entry.shift.startTime}–{entry.shift.endTime}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-bold leading-tight truncate max-w-full">
+                          {entry.shift.shortName}
                         </span>
                       )}
                     </div>
@@ -263,27 +274,6 @@ export default function EmployeeSchedulePage() {
           </div>
         )}
       </div>
-
-      {/* Légende */}
-      {entries.length > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-100 p-4">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Légende</p>
-          <div className="flex flex-wrap gap-2">
-            {[...new Map(entries.map((e) => [e.shift.id, e.shift])).values()].map((shift) => (
-              <div
-                key={shift.id}
-                className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold"
-                style={{ backgroundColor: shift.color, color: shift.textColor }}
-              >
-                <span>{shift.shortName}</span>
-                {shift.type === 'work' && (
-                  <span className="opacity-60">· {shift.durationHours}h</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

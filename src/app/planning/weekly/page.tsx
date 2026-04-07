@@ -530,32 +530,26 @@ export default function WeeklyPlanningPage() {
                                 ? ''
                                 : 'bg-transparent'
                             }`}
-                            style={
-                              shift && !isActive
-                                ? { backgroundColor: shift.color + '33' }
-                                : undefined
-                            }
                           >
                             {shift ? (
-                              <>
-                                <span
-                                  className="text-xs font-bold px-2 py-1 rounded-lg"
-                                  style={{
-                                    backgroundColor: shift.color,
-                                    color: shift.textColor,
-                                  }}
-                                >
+                              /* Un seul bloc couleur : l'horaire doit être sur le même fond que l'abréviation,
+                               * sinon textColor (prévu pour fond foncé) tombe sur la zone claire color+33. */
+                              <div
+                                className="flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-xl w-full max-w-[5.5rem]"
+                                style={{
+                                  backgroundColor: shift.color,
+                                  color: shift.textColor,
+                                }}
+                              >
+                                <span className="text-xs font-bold leading-tight">
                                   {shift.shortName}
                                 </span>
-                                <p
-                                  className="hidden sm:block text-[10px] mt-1 font-medium"
-                                  style={{ color: shift.textColor }}
-                                >
+                                <span className="hidden sm:block text-[10px] font-medium leading-tight opacity-95 text-center">
                                   {shift.durationHours > 0
                                     ? `${shift.startTime}–${shift.endTime}`
                                     : shift.name}
-                                </p>
-                              </>
+                                </span>
+                              </div>
                             ) : (
                               <span className="text-slate-200 text-lg group-hover:text-slate-300">
                                 +
