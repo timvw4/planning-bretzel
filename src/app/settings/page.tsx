@@ -124,12 +124,15 @@ function getFrenchHolidays(year: number): PublicHoliday[] {
 export default function SettingsPage() {
   const { settings, updateSettings, employees, shifts, scheduleEntries } = usePlanningStore();
 
-  const [notifications, setNotifications] = useState({
+  const defaultNotifications = {
     overtime: true,
     unavailable: true,
     lowRest: true,
     weeklyReport: false,
-  });
+  };
+  const [notifications, setNotifications] = useState(
+    settings.notifications ?? defaultNotifications
+  );
 
   // ---- État local pour le formulaire d'ajout de jour férié ----
   const [newHolidayDate, setNewHolidayDate] = useState('');
@@ -166,7 +169,8 @@ export default function SettingsPage() {
   };
 
   const handleSave = () => {
-    toast.success('Paramètres enregistrés');
+    updateSettings({ notifications });
+    toast.success('Paramètres de notifications enregistrés');
   };
 
   const handleExportData = () => {
@@ -218,7 +222,7 @@ export default function SettingsPage() {
             <Input
               value={settings.companyName}
               onChange={(e) => updateSettings({ companyName: e.target.value })}
-              placeholder="Bretzel & Co"
+              placeholder="Bretzel"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -518,7 +522,7 @@ export default function SettingsPage() {
             </p>
           </div>
           <div className="text-right">
-            <p className="text-[10px] text-slate-400">Données stockées localement</p>
+            <p className="text-[10px] text-slate-400">Données stockées sur Supabase</p>
             <p className="text-[10px] text-slate-400">© 2026 Tous droits réservés</p>
           </div>
         </div>

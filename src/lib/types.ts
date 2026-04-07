@@ -75,6 +75,13 @@ export interface PublicHoliday {
 
 export type PlanningMonthMode = 'strict' | 'full-weeks';
 
+export interface NotificationSettings {
+  overtime: boolean;
+  unavailable: boolean;
+  lowRest: boolean;
+  weeklyReport: boolean;
+}
+
 export interface AppSettings {
   companyName: string;
   companyLogo?: string;
@@ -85,7 +92,8 @@ export interface AppSettings {
   timezone: string;
   theme: 'light' | 'dark' | 'system';
   holidays: PublicHoliday[];
-  planningMonthMode: PlanningMonthMode; // 'strict' = 1er au dernier jour | 'full-weeks' = semaines complètes
+  planningMonthMode: PlanningMonthMode;
+  notifications: NotificationSettings;
 }
 
 // Types utilitaires pour l'UI

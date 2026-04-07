@@ -2,7 +2,7 @@
 
 import { Sidebar } from './Sidebar';
 import { Toaster } from 'react-hot-toast';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { usePlanningStore } from '@/lib/store';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Loader2 } from 'lucide-react';
@@ -22,6 +22,7 @@ const isPublicRoute = (pathname: string) =>
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isAdminPage = !isPublicRoute(pathname);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const { loadData, refreshAlerts, isLoading } = usePlanningStore();
 
@@ -57,8 +58,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <TooltipProvider delayDuration={300}>
       <div className="min-h-screen bg-slate-50">
-        <Sidebar />
-        <div className="ml-64 min-h-screen flex flex-col">
+        <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((v) => !v)} />
+        <div
+          className="min-h-screen flex flex-col transition-all duration-300"
+          style={{ marginLeft: sidebarCollapsed ? 64 : 256 }}
+        >
           <main className="flex-1">
             {children}
           </main>

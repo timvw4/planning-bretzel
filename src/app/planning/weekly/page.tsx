@@ -383,8 +383,8 @@ export default function WeeklyPlanningPage() {
       </div>
 
       {/* Planning hebdomadaire — Vue principale */}
-      <div className="flex-1 overflow-auto p-6">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm [overflow:clip]" style={{ cursor: isLocked ? 'not-allowed' : brushShiftId ? 'crosshair' : eraseMode ? 'cell' : 'default' }}>
+      <div className="flex-1 overflow-auto bg-slate-50">
+        <div className="bg-white [overflow:clip]" style={{ cursor: isLocked ? 'not-allowed' : brushShiftId ? 'crosshair' : eraseMode ? 'cell' : 'default' }}>
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-20 bg-white shadow-sm">
               <tr className="border-b border-slate-200">

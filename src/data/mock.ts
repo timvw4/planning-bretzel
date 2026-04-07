@@ -341,6 +341,12 @@ export const defaultSettings: AppSettings = {
   timezone: 'Europe/Paris',
   theme: 'light',
   planningMonthMode: 'strict',
+  notifications: {
+    overtime: true,
+    unavailable: true,
+    lowRest: true,
+    weeklyReport: false,
+  },
   holidays: [
     { date: '2026-01-01', name: 'Jour de l\'An' },
     { date: '2026-04-06', name: 'Lundi de Pâques' },

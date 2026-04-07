@@ -106,6 +106,12 @@ function dbToSettings(row: any): AppSettings {
     theme: 'light',
     holidays: row.holidays ?? [],
     planningMonthMode: row.planning_month_mode ?? 'strict',
+    notifications: row.notifications ?? {
+      overtime: true,
+      unavailable: true,
+      lowRest: true,
+      weeklyReport: false,
+    },
   };
 }
 
@@ -267,6 +273,7 @@ export const db = {
         timezone: settings.timezone,
         planning_month_mode: settings.planningMonthMode,
         holidays: settings.holidays,
+        notifications: settings.notifications,
         updated_at: new Date().toISOString(),
       })
       .not('id', 'is', null);
