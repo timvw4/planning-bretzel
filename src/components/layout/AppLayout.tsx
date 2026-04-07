@@ -9,11 +9,17 @@ import { Loader2 } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 
 // Pages qui ne doivent PAS afficher la sidebar admin
-const PUBLIC_ROUTES = ['/login', '/register', '/employee', '/auth'];
+// Note : '/employee' avec correspondance exacte ou '/employee/' pour éviter de matcher '/employees'
+const isPublicRoute = (pathname: string) =>
+  pathname === '/login' ||
+  pathname === '/register' ||
+  pathname.startsWith('/auth') ||
+  pathname === '/employee' ||
+  pathname.startsWith('/employee/');
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isAdminPage = !PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
+  const isAdminPage = !isPublicRoute(pathname);
 
   const { loadData, refreshAlerts, isLoading } = usePlanningStore();
 
