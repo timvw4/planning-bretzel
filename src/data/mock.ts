@@ -19,7 +19,6 @@ export const mockShifts: Shift[] = [
     durationHours: 8,
     description: 'Service du matin',
     isActive: true,
-    inactiveMonths: [],
   },
   {
     id: 'shift-soir',
@@ -33,7 +32,6 @@ export const mockShifts: Shift[] = [
     durationHours: 8,
     description: 'Service du soir',
     isActive: true,
-    inactiveMonths: [],
   },
   {
     id: 'shift-journee',
@@ -47,7 +45,6 @@ export const mockShifts: Shift[] = [
     durationHours: 8,
     description: 'Horaires de journée standard',
     isActive: true,
-    inactiveMonths: [],
   },
   {
     id: 'shift-courte',
@@ -61,7 +58,6 @@ export const mockShifts: Shift[] = [
     durationHours: 4,
     description: 'Demi-journée du matin',
     isActive: true,
-    inactiveMonths: [],
   },
   {
     id: 'shift-nuit',
@@ -75,7 +71,6 @@ export const mockShifts: Shift[] = [
     durationHours: 8,
     description: 'Service de nuit',
     isActive: true,
-    inactiveMonths: [],
   },
   {
     id: 'shift-off',
@@ -89,7 +84,6 @@ export const mockShifts: Shift[] = [
     durationHours: 0,
     description: 'Jour de repos',
     isActive: true,
-    inactiveMonths: [],
   },
   {
     id: 'shift-conge',
@@ -103,7 +97,6 @@ export const mockShifts: Shift[] = [
     durationHours: 0,
     description: 'Congé payé',
     isActive: true,
-    inactiveMonths: [],
   },
   {
     id: 'shift-maladie',
@@ -117,7 +110,6 @@ export const mockShifts: Shift[] = [
     durationHours: 0,
     description: 'Arrêt maladie',
     isActive: true,
-    inactiveMonths: [],
   },
   {
     id: 'shift-formation',
@@ -131,7 +123,6 @@ export const mockShifts: Shift[] = [
     durationHours: 8,
     description: 'Jour de formation',
     isActive: true,
-    inactiveMonths: [],
   },
 ];
 
@@ -150,7 +141,6 @@ export const mockEmployees: Employee[] = [
     contractHours: 35,
     notes: 'Référente équipe. Préfère les horaires du matin.',
     isActive: true,
-    inactiveMonths: [],
     createdAt: '2023-01-15',
   },
   {
@@ -166,7 +156,6 @@ export const mockEmployees: Employee[] = [
     contractHours: 39,
     notes: 'Disponible le samedi. Allergique aux arachides.',
     isActive: true,
-    inactiveMonths: [],
     createdAt: '2023-03-10',
   },
   {
@@ -182,7 +171,6 @@ export const mockEmployees: Employee[] = [
     contractHours: 24,
     notes: 'Disponible uniquement en soirée les jours de semaine.',
     isActive: true,
-    inactiveMonths: [],
     createdAt: '2023-05-20',
   },
   {
@@ -198,7 +186,6 @@ export const mockEmployees: Employee[] = [
     contractHours: 35,
     notes: 'Maîtrise la mixologie. Formation cocktail en cours.',
     isActive: true,
-    inactiveMonths: [],
     createdAt: '2023-02-01',
   },
   {
@@ -214,7 +201,6 @@ export const mockEmployees: Employee[] = [
     contractHours: 39,
     notes: 'Spécialiste pâtisserie. Ne travaille pas le week-end.',
     isActive: true,
-    inactiveMonths: [],
     createdAt: '2022-11-15',
   },
   {
@@ -230,7 +216,6 @@ export const mockEmployees: Employee[] = [
     contractHours: 20,
     notes: 'Étudiant. Disponible surtout en soirée.',
     isActive: true,
-    inactiveMonths: [],
     createdAt: '2024-01-08',
   },
   {
@@ -246,7 +231,6 @@ export const mockEmployees: Employee[] = [
     contractHours: 35,
     notes: 'Accès caisse principale. Référente administratif.',
     isActive: true,
-    inactiveMonths: [],
     createdAt: '2022-08-22',
   },
   {
@@ -262,7 +246,6 @@ export const mockEmployees: Employee[] = [
     contractHours: 39,
     notes: 'Polyvalent. Disponible 7j/7.',
     isActive: true,
-    inactiveMonths: [],
     createdAt: '2023-06-01',
   },
   {
@@ -278,7 +261,6 @@ export const mockEmployees: Employee[] = [
     contractHours: 16,
     notes: 'Travaille en extra le week-end.',
     isActive: true,
-    inactiveMonths: [],
     createdAt: '2024-03-15',
   },
 ];
