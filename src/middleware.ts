@@ -50,7 +50,8 @@ export async function middleware(request: NextRequest) {
   }
 
   // Employé qui tente d'accéder aux pages admin → rediriger vers /employee
-  if (user && !pathname.startsWith('/employee') && pathname !== '/login') {
+  const publicPagesForAll = ['/login', '/forgot-password', '/reset-password', '/register'];
+  if (user && !pathname.startsWith('/employee') && !publicPagesForAll.includes(pathname)) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')

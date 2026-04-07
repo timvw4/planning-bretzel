@@ -13,6 +13,8 @@ import { usePathname } from 'next/navigation';
 const isPublicRoute = (pathname: string) =>
   pathname === '/login' ||
   pathname === '/register' ||
+  pathname === '/forgot-password' ||
+  pathname === '/reset-password' ||
   pathname.startsWith('/auth') ||
   pathname === '/employee' ||
   pathname.startsWith('/employee/');
