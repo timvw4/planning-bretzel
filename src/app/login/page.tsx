@@ -112,6 +112,12 @@ export default function LoginPage() {
 
         <div className="text-center mt-6 space-y-2">
           <p className="text-xs text-slate-400">
+            Mot de passe oublié ?{' '}
+            <a href="/forgot-password" className="text-indigo-600 font-semibold hover:underline">
+              Réinitialiser
+            </a>
+          </p>
+          <p className="text-xs text-slate-400">
             Première connexion ?{' '}
             <a href="/register" className="text-indigo-600 font-semibold hover:underline">
               Créer mon compte

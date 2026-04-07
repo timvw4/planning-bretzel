@@ -128,7 +128,7 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
           {/* Rôle */}
           <div className="space-y-1.5">
             <Label htmlFor="role">
-              Poste / Rôle <span className="text-slate-400 text-xs font-normal">*</span>
+              Poste / Rôle <span className="text-red-400">*</span>
             </Label>
             <Input
               id="role"
@@ -142,7 +142,7 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="email">
-                Email <span className="text-slate-400 text-xs font-normal">*</span>
+                Email <span className="text-red-400">*</span>
               </Label>
               <Input
                 id="email"

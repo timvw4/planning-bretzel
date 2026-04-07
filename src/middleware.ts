@@ -28,8 +28,9 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   const { pathname } = request.nextUrl;
 
-  // Utilisateur non connecté → page login (sauf /register qui est public)
-  if (!user && pathname !== '/login' && pathname !== '/register') {
+  // Pages publiques accessibles sans connexion
+  const publicPaths = ['/login', '/register', '/forgot-password', '/reset-password'];
+  if (!user && !publicPaths.includes(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     return NextResponse.redirect(url);
