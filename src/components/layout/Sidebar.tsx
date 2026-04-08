@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
@@ -11,7 +12,6 @@ import {
   Settings,
   ChevronRight,
   ChevronLeft,
-  Zap,
   ShieldCheck,
   LogOut,
   CalendarCheck,
@@ -99,8 +99,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         'flex items-center border-b border-slate-100 transition-all duration-300',
         collapsed ? 'justify-center px-0 py-5' : 'gap-3 px-4 py-5'
       )}>
-        <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shadow-sm shrink-0">
-          <Zap className="w-4 h-4 text-white" />
+        <div className="w-8 h-8 rounded-lg overflow-hidden shadow-sm shrink-0">
+          <Image
+            src="/icon-512.png"
+            alt="Logo Bretzel"
+            width={32}
+            height={32}
+            className="w-8 h-8 object-cover"
+            priority
+          />
         </div>
         {!collapsed && (
           <div className="overflow-hidden">
