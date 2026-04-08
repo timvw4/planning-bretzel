@@ -322,6 +322,7 @@ function generateMockSchedule(): ScheduleEntry[] {
         date: dateStr,
         note: undefined,
         isModified: false,
+        visibleToEmployee: true,
       });
     });
   }

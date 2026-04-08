@@ -24,14 +24,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const isAdminPage = !isPublicRoute(pathname);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const { loadData, refreshAlerts, isLoading } = usePlanningStore();
+  const loadData = usePlanningStore((s) => s.loadData);
+  const isLoading = usePlanningStore((s) => s.isLoading);
 
   useEffect(() => {
-    // Charger les données Supabase uniquement sur les pages admin
+    // Charger les données Supabase uniquement sur les pages admin (alertes incluses dans loadData)
     if (!isAdminPage) return;
-    loadData().then(() => refreshAlerts());
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdminPage]);
+    void loadData();
+  }, [isAdminPage, loadData]);
 
   // Pages publiques (login, register, employee) → pas de sidebar, pas de chargement admin
   if (!isAdminPage) {

@@ -5,7 +5,7 @@
 
 import { createClient } from './client';
 import { Employee, Shift, ScheduleEntry, AppSettings } from '@/lib/types';
-import { format } from 'date-fns';
+import { format, parse, startOfMonth, endOfMonth } from 'date-fns';
 
 // ── Conversions Supabase (snake_case) ↔ App (camelCase) ──────
 
@@ -91,6 +91,8 @@ function dbToEntry(row: any): ScheduleEntry {
       : format(new Date(row.date), 'yyyy-MM-dd'),
     note: row.note ?? '',
     isModified: row.is_modified ?? false,
+    // Sans colonne (anciennes bases) : comportement historique = visible
+    visibleToEmployee: row.visible_to_employee ?? true,
   };
 }
 
@@ -178,9 +180,9 @@ export const db = {
   // ── Planning ───────────────────────────────────────────────
   async getScheduleEntries(): Promise<ScheduleEntry[]> {
     const supabase = createClient();
-    const { data, error } = await supabase
-      .from('schedule_entries')
-      .select('*');
+    const { data, error } = await supabase.from('schedule_entries').select(
+      'id, employee_id, shift_id, date, note, is_modified, visible_to_employee'
+    );
     if (error) throw error;
     return (data ?? []).map(dbToEntry);
   },
@@ -197,6 +199,7 @@ export const db = {
           date: entry.date,
           note: entry.note ?? '',
           is_modified: entry.isModified ?? false,
+          visible_to_employee: entry.visibleToEmployee,
         },
         { onConflict: 'employee_id,date' }
       );
@@ -234,6 +237,7 @@ export const db = {
           date: e.date,
           note: e.note ?? '',
           is_modified: e.isModified ?? false,
+          visible_to_employee: e.visibleToEmployee,
         })),
         { onConflict: 'employee_id,date' }
       );
@@ -303,5 +307,64 @@ export const db = {
       .from('locked_months')
       .delete()
       .eq('month_key', monthKey);
+  },
+
+  /** Rend visibles pour les employés toutes les entrées du mois calendaire (yyyy-MM). */
+  async publishMonthEntries(monthKey: string): Promise<void> {
+    const supabase = createClient();
+    const d = parse(`${monthKey}-01`, 'yyyy-MM-dd', new Date());
+    const start = format(startOfMonth(d), 'yyyy-MM-dd');
+    const end = format(endOfMonth(d), 'yyyy-MM-dd');
+    const { error } = await supabase
+      .from('schedule_entries')
+      .update({ visible_to_employee: true })
+      .gte('date', start)
+      .lte('date', end);
+    if (error) throw error;
+  },
+
+  /** Rend visibles pour les employés toutes les entrées entre deux dates incluses (lundi–dimanche). */
+  async publishWeekEntries(weekStartMonday: string, weekEndSunday: string): Promise<void> {
+    const supabase = createClient();
+    const { error } = await supabase
+      .from('schedule_entries')
+      .update({ visible_to_employee: true })
+      .gte('date', weekStartMonday)
+      .lte('date', weekEndSunday);
+    if (error) throw error;
+  },
+
+  // ── Disponibilités employés (alertes admin) ─────────────────
+  async getAvailabilityRequestsInRange(
+    dateFrom: string,
+    dateTo: string
+  ): Promise<{ employeeId: string; date: string; status: string }[]> {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from('availability_requests')
+      .select('employee_id, date, status')
+      .gte('date', dateFrom)
+      .lte('date', dateTo);
+    if (error) throw error;
+    return (data ?? []).map((r) => ({
+      employeeId: r.employee_id as string,
+      date:
+        typeof r.date === 'string' && (r.date as string).length === 10
+          ? (r.date as string)
+          : format(new Date(r.date as string), 'yyyy-MM-dd'),
+      status: String((r as { status?: string }).status ?? ''),
+    }));
+  },
+
+  async getAvailabilityValidations(): Promise<{ employeeId: string; monthKey: string }[]> {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from('availability_validations')
+      .select('employee_id, month_key');
+    if (error) throw error;
+    return (data ?? []).map((r) => ({
+      employeeId: r.employee_id as string,
+      monthKey: r.month_key as string,
+    }));
   },
 };

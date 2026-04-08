@@ -26,6 +26,7 @@ import { fr } from 'date-fns/locale';
 import Link from 'next/link';
 import { Header } from '@/components/layout/Header';
 import { usePlanningStore } from '@/lib/store';
+import { useShallow } from 'zustand/react/shallow';
 import { formatHours, getInitials, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -133,7 +134,16 @@ export default function DashboardPage() {
     alerts,
     getWeeklyHours,
     getMonthlyHours,
-  } = usePlanningStore();
+  } = usePlanningStore(
+    useShallow((s) => ({
+      employees: s.employees,
+      shifts: s.shifts,
+      scheduleEntries: s.scheduleEntries,
+      alerts: s.alerts,
+      getWeeklyHours: s.getWeeklyHours,
+      getMonthlyHours: s.getMonthlyHours,
+    }))
+  );
 
   const today = new Date();
   const weekStart = format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');

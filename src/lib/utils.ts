@@ -1,6 +1,16 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { format, parseISO, differenceInMinutes, addMinutes, parse, isWeekend, isToday } from 'date-fns';
+import {
+  format,
+  parseISO,
+  differenceInMinutes,
+  addMinutes,
+  parse,
+  isWeekend,
+  isToday,
+  addMonths,
+  subMonths,
+} from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { Employee, Shift, ScheduleEntry, PlanningAlert, DayColumn } from './types';
 
@@ -172,6 +182,105 @@ export function detectAlerts(
   });
 
   return alerts;
+}
+
+/**
+ * Shift de travail un jour marqué « indisponible » dans availability_requests,
+ * alors que l’employé a validé le mois (availability_validations).
+ * Parcourt toutes les entrées planning (pas seulement la semaine courante).
+ */
+export function detectValidatedAvailabilityConflicts(
+  entries: ScheduleEntry[],
+  employees: Employee[],
+  shifts: Shift[],
+  requests: { employeeId: string; date: string; status: string }[],
+  validations: { employeeId: string; monthKey: string }[]
+): PlanningAlert[] {
+  const shiftMap = new Map(shifts.map((s) => [s.id, s]));
+  const empMap = new Map(employees.map((e) => [e.id, e]));
+
+  const validatedMonth = new Set(
+    validations.map((v) => `${v.employeeId}|${v.monthKey}`)
+  );
+  const unavailableDay = new Set(
+    requests
+      .filter((r) => r.status === 'unavailable')
+      .map((r) => `${r.employeeId}|${r.date}`)
+  );
+
+  const alerts: PlanningAlert[] = [];
+  const seenEmpDate = new Set<string>();
+
+  for (const entry of entries) {
+    const shift = shiftMap.get(entry.shiftId);
+    if (!shift || shift.type !== 'work') continue;
+
+    const monthKey = format(parseISO(entry.date), 'yyyy-MM');
+    if (!validatedMonth.has(`${entry.employeeId}|${monthKey}`)) continue;
+    if (!unavailableDay.has(`${entry.employeeId}|${entry.date}`)) continue;
+
+    const dedupeKey = `${entry.employeeId}|${entry.date}`;
+    if (seenEmpDate.has(dedupeKey)) continue;
+    seenEmpDate.add(dedupeKey);
+
+    const employee = empMap.get(entry.employeeId);
+    if (!employee) continue;
+
+    alerts.push({
+      id: `alert-unavail-validated-${entry.employeeId}-${entry.date}`,
+      type: 'validated_unavailable',
+      severity: 'error',
+      message: `${employee.firstName} ${employee.lastName} est planifié(e) le ${formatDate(entry.date)} alors qu'il/elle a indiqué être indisponible et a validé ses disponibilités pour ce mois.`,
+      employeeId: entry.employeeId,
+      date: entry.date,
+      resolved: false,
+    });
+  }
+
+  return alerts;
+}
+
+export type AvailabilityRequestRow = { employeeId: string; date: string; status: string };
+export type AvailabilityValidationRow = { employeeId: string; monthKey: string };
+
+/** Alertes hebdo + conflits dispo / mois validé (charge initiale et refresh). */
+export function buildPlanningAlerts(
+  employees: Employee[],
+  shifts: Shift[],
+  scheduleEntries: ScheduleEntry[],
+  weekStart: string,
+  weekEnd: string,
+  availabilityRequests: AvailabilityRequestRow[],
+  availabilityValidations: AvailabilityValidationRow[]
+): PlanningAlert[] {
+  const weekly = detectAlerts(scheduleEntries, employees, shifts, weekStart, weekEnd);
+  const validated = detectValidatedAvailabilityConflicts(
+    scheduleEntries,
+    employees,
+    shifts,
+    availabilityRequests,
+    availabilityValidations
+  );
+  return [...weekly, ...validated];
+}
+
+/** Plage de dates pour charger availability_requests (bornes des entrées ou ±3 mois). */
+export function getAvailabilityFetchRange(
+  scheduleEntries: ScheduleEntry[],
+  referenceDate: Date
+): { rangeFrom: string; rangeTo: string } {
+  const dates = scheduleEntries.map((e) => e.date).filter(Boolean);
+  const sorted = [...dates].sort();
+  return {
+    rangeFrom:
+      sorted.length > 0
+        ? sorted[0]!
+        : format(subMonths(referenceDate, 3), 'yyyy-MM-dd'),
+    rangeTo:
+      sorted.length > 0
+        ? sorted[sorted.length - 1]!
+        : format(addMonths(referenceDate, 3), 'yyyy-MM-dd'),
+  };
 }
 
 // ---- POSITIONNEMENT POPUP ----

@@ -78,6 +78,7 @@ export default function EmployeeSchedulePage() {
         .from('schedule_entries')
         .select(`date, shifts (id, name, short_name, type, start_time, end_time, color, text_color, duration_hours)`)
         .eq('employee_id', employeeId)
+        .eq('visible_to_employee', true)
         .gte('date', start)
         .lte('date', end)
         .order('date');
@@ -148,6 +149,17 @@ export default function EmployeeSchedulePage() {
 
   return (
     <div className="space-y-5">
+      {/* Aucun créneau publié sur la plage chargée : soit vide, soit encore en préparation côté équipe */}
+      {!loading && entries.length === 0 && employeeId && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <p className="font-medium text-slate-800">Aucun planning affiché pour cette période</p>
+          <p className="mt-1 text-xs text-slate-500 leading-relaxed">
+            Soit vous n&apos;avez pas encore de créneaux prévus, soit votre responsable n&apos;a pas encore
+            &quot;envoyé&quot; le planning (mois ou semaine) depuis l&apos;interface admin. Revenez plus tard ou
+            contactez votre équipe si besoin.
+          </p>
+        </div>
+      )}
 
       {/* Prochain shift */}
       {nextEntry && (

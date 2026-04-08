@@ -12,6 +12,7 @@ import {
   Info,
   Eraser,
   Lock,
+  Send,
 } from 'lucide-react';
 import {
   format,
@@ -29,7 +30,16 @@ import { fr } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { ShiftPicker } from '@/components/planning/ShiftPicker';
+import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
 import { usePlanningStore } from '@/lib/store';
 import { formatDate, formatHours, getInitials, calcPickerPosition } from '@/lib/utils';
 import { PlanningAlert } from '@/lib/types';
@@ -47,6 +57,7 @@ export default function WeeklyPlanningPage() {
     resolveAlert,
     isMonthLocked,
     settings,
+    publishWeekForEmployees,
   } = usePlanningStore();
 
   const [currentWeekDate, setCurrentWeekDate] = useState(new Date());
@@ -56,6 +67,8 @@ export default function WeeklyPlanningPage() {
   const [showAlerts, setShowAlerts] = useState(false);
   const [brushShiftId, setBrushShiftId] = useState<string | null>(null);
   const [eraseMode, setEraseMode] = useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishSubmitting, setPublishSubmitting] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
 
   const weekStart = startOfWeek(currentWeekDate, { weekStartsOn: 1 });
@@ -179,6 +192,24 @@ export default function WeeklyPlanningPage() {
     toast.success('Semaine copiée vers la semaine suivante');
   };
 
+  const handleConfirmPublishWeek = async () => {
+    setPublishSubmitting(true);
+    try {
+      await publishWeekForEmployees(weekStartStr, weekEndStr);
+      toast.success(
+        `La semaine du ${formatDate(weekStartStr)} au ${formatDate(weekEndStr)} est visible pour les employés.`
+      );
+      setPublishDialogOpen(false);
+    } catch (e) {
+      console.error(e);
+      toast.error(
+        'Publication impossible. Vérifiez la connexion et la colonne visible_to_employee sur schedule_entries.'
+      );
+    } finally {
+      setPublishSubmitting(false);
+    }
+  };
+
   const activeCell_entry = activeCell
     ? scheduleEntries.find(
         (e) => e.employeeId === activeCell.empId && e.date === activeCell.date
@@ -217,9 +248,51 @@ export default function WeeklyPlanningPage() {
               <Copy className="h-4 w-4" />
               Copier la semaine
             </Button>
+            <Button
+              variant="default"
+              size="sm"
+              className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => setPublishDialogOpen(true)}
+            >
+              <Send className="h-4 w-4" />
+              Envoyer la semaine
+            </Button>
           </div>
         }
       />
+
+      <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Envoyer la semaine aux employés ?</DialogTitle>
+            <DialogDescription className="text-sm text-slate-600 space-y-2 pt-1">
+              <p>
+                Tous les créneaux du{' '}
+                <strong>
+                  {format(weekStart, 'd MMM', { locale: fr })} au {format(weekEnd, 'd MMM yyyy', { locale: fr })}
+                </strong>{' '}
+                deviennent visibles sur le compte employé.
+              </p>
+              <p className="text-xs text-slate-500">
+                Les shifts en brouillon (cadre en pointillés) seront inclus. Les employés ne voient que les jours
+                publiés ; vous pouvez envoyer mois par mois ou semaine par semaine selon votre usage.
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setPublishDialogOpen(false)} disabled={publishSubmitting}>
+              Annuler
+            </Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => void handleConfirmPublishWeek()}
+              disabled={publishSubmitting}
+            >
+              {publishSubmitting ? 'Envoi…' : "Confirmer l'envoi"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Panel alertes */}
       {showAlerts && activeAlerts.length > 0 && (
@@ -312,6 +385,15 @@ export default function WeeklyPlanningPage() {
             <p className="text-sm font-bold text-slate-900">{formatHours(totalWeekHours)}</p>
           </div>
         </div>
+
+        <PlanningPublicationStatusBar
+          periodStart={weekStartStr}
+          periodEnd={weekEndStr}
+          scheduleEntries={scheduleEntries}
+          periodLabel={`du ${format(weekStart, 'd MMMM', { locale: fr })} au ${format(weekEnd, 'd MMMM yyyy', {
+            locale: fr,
+          })}`}
+        />
 
         {/* Ligne 2 : légende shifts + pinceau + gomme (ou badge verrouillé) */}
         <div className="flex items-center gap-2 px-6 pb-3 flex-wrap">
@@ -535,11 +617,18 @@ export default function WeeklyPlanningPage() {
                               /* Un seul bloc couleur : l'horaire doit être sur le même fond que l'abréviation,
                                * sinon textColor (prévu pour fond foncé) tombe sur la zone claire color+33. */
                               <div
-                                className="flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-xl w-full max-w-[5.5rem]"
+                                className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-xl w-full max-w-[5.5rem] ${
+                                  entry && !entry.visibleToEmployee ? 'ring-2 ring-dashed ring-slate-600/45' : ''
+                                }`}
                                 style={{
                                   backgroundColor: shift.color,
                                   color: shift.textColor,
                                 }}
+                                title={
+                                  entry && !entry.visibleToEmployee
+                                    ? 'Brouillon — pas encore visible pour l’employé'
+                                    : undefined
+                                }
                               >
                                 <span className="text-xs font-bold leading-tight">
                                   {shift.shortName}

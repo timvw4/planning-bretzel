@@ -46,13 +46,21 @@ export interface ScheduleEntry {
   date: string;            // Format ISO "YYYY-MM-DD"
   note?: string;
   isModified?: boolean;    // Marqué si modifié après publication
+  /** false = brouillon admin ; l'employé ne voit le créneau qu'après publication du mois/semaine */
+  visibleToEmployee: boolean;
 }
 
 export type AlertSeverity = 'error' | 'warning' | 'info';
 
 export interface PlanningAlert {
   id: string;
-  type: 'overtime' | 'conflict' | 'unavailable' | 'rest' | 'understaffed';
+  type:
+    | 'overtime'
+    | 'conflict'
+    | 'unavailable'
+    | 'validated_unavailable'
+    | 'rest'
+    | 'understaffed';
   severity: AlertSeverity;
   message: string;
   employeeId?: string;

@@ -2,6 +2,7 @@
 
 import { Bell, AlertTriangle, AlertCircle, Info, Check, CheckCheck, X } from 'lucide-react';
 import { usePlanningStore } from '@/lib/store';
+import { useShallow } from 'zustand/react/shallow';
 import { formatDate } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useState, useRef, useEffect } from 'react';
@@ -38,7 +39,13 @@ const SEVERITY_BG: Record<PlanningAlert['severity'], string> = {
 };
 
 export function Header({ title, subtitle, actions }: HeaderProps) {
-  const { alerts, resolveAlert, employees } = usePlanningStore();
+  const { alerts, resolveAlert, employees } = usePlanningStore(
+    useShallow((s) => ({
+      alerts: s.alerts,
+      resolveAlert: s.resolveAlert,
+      employees: s.employees,
+    }))
+  );
   const [initials, setInitials] = useState('?');
 
   useEffect(() => {

@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import { Employee, Shift, ScheduleEntry, AppSettings, PlanningAlert } from './types';
 import { defaultSettings } from '@/data/mock';
-import { detectAlerts } from './utils';
+import { buildPlanningAlerts, getAvailabilityFetchRange } from './utils';
 import { db } from '@/lib/supabase/db';
 import { format, startOfWeek, endOfWeek } from 'date-fns';
 
@@ -52,8 +52,13 @@ interface PlanningStore {
   unlockMonth: (monthKey: string) => void;
   isMonthLocked: (monthKey: string) => boolean;
 
+  /** Publie le planning du mois : les employés voient les créneaux de cette plage. */
+  publishMonthForEmployees: (monthKey: string) => Promise<void>;
+  /** Publie la semaine (lundi → dimanche) : les employés voient ces jours. */
+  publishWeekForEmployees: (weekStartMonday: string, weekEndSunday: string) => Promise<void>;
+
   // ---- Alertes ----
-  refreshAlerts: () => void;
+  refreshAlerts: () => Promise<void>;
   resolveAlert: (alertId: string) => void;
 
   // ---- Getters calculés ----
@@ -88,12 +93,39 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         db.getSettings(),
         db.getLockedMonths(),
       ]);
+
+      const today = new Date();
+      const weekStart = format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+      const weekEnd = format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+      const { rangeFrom, rangeTo } = getAvailabilityFetchRange(entries, today);
+
+      let alerts: PlanningAlert[] = [];
+      try {
+        const [requests, validations] = await Promise.all([
+          db.getAvailabilityRequestsInRange(rangeFrom, rangeTo),
+          db.getAvailabilityValidations(),
+        ]);
+        alerts = buildPlanningAlerts(
+          employees,
+          shifts,
+          entries,
+          weekStart,
+          weekEnd,
+          requests,
+          validations
+        );
+      } catch (err) {
+        console.error('loadData : disponibilités / validations (alertes partielles)', err);
+        alerts = buildPlanningAlerts(employees, shifts, entries, weekStart, weekEnd, [], []);
+      }
+
       set({
         employees,
         shifts,
         scheduleEntries: entries,
         settings: settings ?? defaultSettings,
         lockedMonths,
+        alerts,
         isLoading: false,
       });
     } catch (error) {
@@ -187,7 +219,13 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     );
 
     if (existingEntry) {
-      const updated: ScheduleEntry = { ...existingEntry, shiftId, note, isModified: true };
+      const updated: ScheduleEntry = {
+        ...existingEntry,
+        shiftId,
+        note,
+        isModified: true,
+        visibleToEmployee: existingEntry.visibleToEmployee,
+      };
       set((state) => ({
         scheduleEntries: state.scheduleEntries.map((e) =>
           e.employeeId === employeeId && e.date === date ? updated : e
@@ -202,6 +240,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         date,
         note,
         isModified: false,
+        visibleToEmployee: false,
       };
       set((state) => ({
         scheduleEntries: [...state.scheduleEntries, newEntry],
@@ -209,7 +248,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       db.upsertEntry(newEntry).catch(console.error);
     }
 
-    get().refreshAlerts();
+    void get().refreshAlerts();
   },
 
   removeShift: (employeeId, date) => {
@@ -219,7 +258,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       ),
     }));
     db.removeEntry(employeeId, date).catch(console.error);
-    get().refreshAlerts();
+    void get().refreshAlerts();
   },
 
   copyWeek: (sourceWeekStart, targetWeekStart) => {
@@ -249,6 +288,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         id: crypto.randomUUID(),
         date: newDate,
         isModified: false,
+        visibleToEmployee: false,
       };
     });
 
@@ -264,6 +304,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     db.deleteEntriesForWeek(targetWeekStart, targetEnd)
       .then(() => db.upsertManyEntries(newEntries))
       .catch(console.error);
+    void get().refreshAlerts();
   },
 
   setCurrentDate: (date) => set({ currentDate: date }),
@@ -298,14 +339,47 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     return get().lockedMonths.includes(monthKey);
   },
 
+  publishMonthForEmployees: async (monthKey) => {
+    await db.publishMonthEntries(monthKey);
+    const scheduleEntries = await db.getScheduleEntries();
+    set({ scheduleEntries });
+  },
+
+  publishWeekForEmployees: async (weekStartMonday, weekEndSunday) => {
+    await db.publishWeekEntries(weekStartMonday, weekEndSunday);
+    const scheduleEntries = await db.getScheduleEntries();
+    set({ scheduleEntries });
+  },
+
   // ---- Alertes ────────────────────────────────────────────
-  refreshAlerts: () => {
+  refreshAlerts: async () => {
     const { employees, shifts, scheduleEntries } = get();
     const today = new Date();
     const weekStart = format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
     const weekEnd = format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
-    const newAlerts = detectAlerts(scheduleEntries, employees, shifts, weekStart, weekEnd);
-    set({ alerts: newAlerts });
+    const { rangeFrom, rangeTo } = getAvailabilityFetchRange(scheduleEntries, today);
+
+    let alerts: PlanningAlert[] = [];
+    try {
+      const [requests, validations] = await Promise.all([
+        db.getAvailabilityRequestsInRange(rangeFrom, rangeTo),
+        db.getAvailabilityValidations(),
+      ]);
+      alerts = buildPlanningAlerts(
+        employees,
+        shifts,
+        scheduleEntries,
+        weekStart,
+        weekEnd,
+        requests,
+        validations
+      );
+    } catch (err) {
+      console.error('refreshAlerts : lecture disponibilités / validations', err);
+      alerts = buildPlanningAlerts(employees, shifts, scheduleEntries, weekStart, weekEnd, [], []);
+    }
+
+    set({ alerts });
   },
 
   resolveAlert: (alertId) => {

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePlanningStore } from '@/lib/store';
+import { useShallow } from 'zustand/react/shallow';
 import { createClient } from '@/lib/supabase/client';
 import { useEffect, useState } from 'react';
 
@@ -62,22 +63,32 @@ interface SidebarProps {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { alerts, settings } = usePlanningStore();
+  const { alerts, settings } = usePlanningStore(
+    useShallow((s) => ({ alerts: s.alerts, settings: s.settings }))
+  );
   const activeAlerts = alerts.filter((a) => !a.resolved);
   const [pendingUnlockCount, setPendingUnlockCount] = useState(0);
 
   useEffect(() => {
     const supabase = createClient();
     const fetchPending = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const { count } = await supabase
         .from('availability_unlock_requests')
         .select('*', { count: 'exact', head: true })
         .eq('status', 'pending');
       setPendingUnlockCount(count ?? 0);
     };
-    fetchPending();
-    const interval = setInterval(fetchPending, 60000);
-    return () => clearInterval(interval);
+    void fetchPending();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void fetchPending();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    const interval = setInterval(fetchPending, 120000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleLogout = async () => {

@@ -14,6 +14,7 @@ import {
   Lock,
   Users,
   ChevronDown,
+  Send,
 } from 'lucide-react';
 import {
   format,
@@ -33,6 +34,14 @@ import toast from 'react-hot-toast';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -41,6 +50,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ShiftPicker } from '@/components/planning/ShiftPicker';
+import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
 import { usePlanningStore } from '@/lib/store';
 import { formatDate, formatHours, getInitials, calcPickerPosition } from '@/lib/utils';
 
@@ -68,6 +78,7 @@ export default function MonthlyPlanningPage() {
     alerts,
     settings,
     isMonthLocked,
+    publishMonthForEmployees,
   } = usePlanningStore();
 
   // ── Map des jours fériés : "yyyy-MM-dd" -> nom ───────────────
@@ -82,6 +93,8 @@ export default function MonthlyPlanningPage() {
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   // ── Mode pinceau : shift sélectionné pour assignation rapide ─
   const [brushShiftId, setBrushShiftId] = useState<string | null>(null);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishSubmitting, setPublishSubmitting] = useState(false);
   // ── Mode gomme : clic sur une case pour effacer son shift ────
   const [eraseMode, setEraseMode] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -373,6 +386,24 @@ export default function MonthlyPlanningPage() {
     toast.success('PDF téléchargé — vérifiez votre dossier Téléchargements');
   };
 
+  const handleConfirmPublishMonth = async () => {
+    setPublishSubmitting(true);
+    try {
+      await publishMonthForEmployees(monthKey);
+      toast.success(
+        `Le planning de ${format(currentMonth, 'MMMM yyyy', { locale: fr })} est maintenant visible pour les employés.`
+      );
+      setPublishDialogOpen(false);
+    } catch (e) {
+      console.error(e);
+      toast.error(
+        'Publication impossible. Vérifiez la connexion et la colonne visible_to_employee sur schedule_entries.'
+      );
+    } finally {
+      setPublishSubmitting(false);
+    }
+  };
+
   // ── Colonne employé : largeur adaptée au zoom ───────────────
   const empColW = zoom.id === 'xs' ? 100 : zoom.id === 'sm' ? 120 : 152;
 
@@ -440,6 +471,16 @@ export default function MonthlyPlanningPage() {
               </DropdownMenuContent>
             </DropdownMenu>
 
+            <Button
+              variant="default"
+              size="sm"
+              className="h-9 gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => setPublishDialogOpen(true)}
+            >
+              <Send className="h-4 w-4" />
+              Envoyer le mois
+            </Button>
+
             {/* Exports */}
             <Button variant="outline" size="sm" onClick={handleExportExcel}>
               <Download className="h-4 w-4" /> Excel
@@ -450,6 +491,37 @@ export default function MonthlyPlanningPage() {
           </div>
         }
       />
+
+      <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Envoyer le mois aux employés ?</DialogTitle>
+            <DialogDescription className="text-sm text-slate-600 space-y-2 pt-1">
+              <p>
+                Tous les créneaux du mois de{' '}
+                <strong>{format(currentMonth, 'MMMM yyyy', { locale: fr })}</strong> deviendront visibles sur le
+                compte employé (planning du mois affiché).
+              </p>
+              <p className="text-xs text-slate-500">
+                Jusqu&apos;ici, les shifts que vous posez restent en <strong>brouillon</strong> (cadre en pointillés
+                sur la grille). Après envoi, les employés les voient.
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setPublishDialogOpen(false)} disabled={publishSubmitting}>
+              Annuler
+            </Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => void handleConfirmPublishMonth()}
+              disabled={publishSubmitting}
+            >
+              {publishSubmitting ? 'Envoi…' : "Confirmer l'envoi"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="flex-1 overflow-hidden flex flex-col">
         {/* ── Barre de navigation ────────────────────────────── */}
@@ -522,6 +594,13 @@ export default function MonthlyPlanningPage() {
               </Button>
             </div>
           </div>
+
+          <PlanningPublicationStatusBar
+            periodStart={monthStartStr}
+            periodEnd={monthEndStr}
+            scheduleEntries={scheduleEntries}
+            periodLabel={format(currentMonth, 'MMMM yyyy', { locale: fr })}
+          />
 
           {/* Ligne 2 : légende shifts + pinceau + gomme (ou badge verrouillé) */}
           <div className="flex items-center gap-2 px-6 pb-2.5 flex-wrap">
@@ -795,7 +874,16 @@ export default function MonthlyPlanningPage() {
                                 : !shift
                                 ? 'hover:bg-slate-200/60 group-hover/row:bg-slate-100/50'
                                 : 'hover:brightness-95'
+                            } ${
+                              shift && entry && !entry.visibleToEmployee
+                                ? 'ring-2 ring-dashed ring-slate-500/55 ring-inset'
+                                : ''
                             }`}
+                            title={
+                              shift && entry && !entry.visibleToEmployee
+                                ? 'Brouillon — pas encore visible pour l’employé'
+                                : undefined
+                            }
                             style={{
                               height: zoom.rowH - 6,
                               backgroundColor: shift ? shift.color : undefined,
