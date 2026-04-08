@@ -110,12 +110,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         'flex items-center border-b border-slate-100 transition-all duration-300',
         collapsed ? 'justify-center px-0 py-5' : 'gap-3 px-4 py-5'
       )}>
-        <div className="w-10 h-10 rounded-xl overflow-hidden shadow-sm shrink-0 ring-1 ring-slate-200/80">
+        <div className="w-12 h-12 rounded-xl overflow-hidden shadow-sm shrink-0 ring-1 ring-slate-200/80">
           <Image
             src="/icon-512.png"
             alt="Logo Bretzel"
-            width={40}
-            height={40}
+            width={48}
+            height={48}
             className="h-full w-full object-cover"
             priority
           />

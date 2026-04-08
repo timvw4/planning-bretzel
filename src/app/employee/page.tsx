@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
   format,
@@ -16,6 +16,7 @@ import {
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { ChevronLeft, ChevronRight, Clock, Sun, Info } from 'lucide-react';
+import { getNextUpcomingWorkEntry } from '@/lib/utils';
 
 interface Shift {
   id: string;
@@ -44,6 +45,8 @@ export default function EmployeeSchedulePage() {
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
+  /** Horloge pour mettre à jour le bandeau « prochain shift » après la fin d’un créneau (sans recharger). */
+  const [now, setNow] = useState(() => new Date());
 
   // Charger l'employeeId depuis le profil connecté
   useEffect(() => {
@@ -105,6 +108,16 @@ export default function EmployeeSchedulePage() {
     load();
   }, [employeeId, currentDate]);
 
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const nextEntry = useMemo(
+    () => getNextUpcomingWorkEntry(entries, now),
+    [entries, now]
+  );
+
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(currentDate);
   const monthStartStr = format(monthStart, 'yyyy-MM-dd');
@@ -142,10 +155,6 @@ export default function EmployeeSchedulePage() {
   const totalHours = entriesForStats.reduce((s, e) => s + (e.shift.durationHours ?? 0), 0);
   const workedDays = entriesForStats.filter((e) => e.shift.type === 'work').length;
   const offDays = entriesForStats.filter((e) => e.shift.type === 'off').length;
-
-  // Prochain shift à venir
-  const today = format(new Date(), 'yyyy-MM-dd');
-  const nextEntry = entries.find((e) => e.date >= today && e.shift.type === 'work');
 
   return (
     <div className="space-y-5">

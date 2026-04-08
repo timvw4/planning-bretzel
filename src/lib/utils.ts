@@ -10,6 +10,7 @@ import {
   isToday,
   addMonths,
   subMonths,
+  addDays,
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { Employee, Shift, ScheduleEntry, PlanningAlert, DayColumn } from './types';
@@ -55,6 +56,47 @@ export function calculateShiftDuration(startTime: string, endTime: string): numb
   }
 
   return differenceInMinutes(end, start) / 60;
+}
+
+/** Début du shift sur le jour `dateStr` (heure locale). */
+export function getShiftStartDateTime(dateStr: string, startTime: string): Date {
+  const day = parse(dateStr, 'yyyy-MM-dd', new Date());
+  const t =
+    startTime && startTime.trim().length >= 4 ? startTime.trim().slice(0, 5) : '00:00';
+  return parse(t, 'HH:mm', day);
+}
+
+/**
+ * Fin du shift sur le calendrier (jour suivant si le shift passe minuit).
+ * Aligné sur la logique de `calculateShiftDuration`.
+ */
+export function getShiftEndDateTime(dateStr: string, startTime: string, endTime: string): Date {
+  const day = parse(dateStr, 'yyyy-MM-dd', new Date());
+  const st =
+    startTime && startTime.trim().length >= 4 ? startTime.trim().slice(0, 5) : '00:00';
+  const et =
+    endTime && endTime.trim().length >= 4 ? endTime.trim().slice(0, 5) : '23:59';
+  const start = parse(st, 'HH:mm', day);
+  let end = parse(et, 'HH:mm', day);
+  if (end <= start) {
+    end = addDays(end, 1);
+  }
+  return end;
+}
+
+/** Premier shift « travail » dont la fin est encore après `now` (tri par début). */
+export function getNextUpcomingWorkEntry<
+  T extends { date: string; shift: { type: string; startTime: string; endTime: string } },
+>(entries: T[], now: Date): T | undefined {
+  const work = entries.filter((e) => e.shift.type === 'work');
+  const sorted = [...work].sort(
+    (a, b) =>
+      getShiftStartDateTime(a.date, a.shift.startTime).getTime() -
+      getShiftStartDateTime(b.date, b.shift.startTime).getTime()
+  );
+  return sorted.find(
+    (e) => getShiftEndDateTime(e.date, e.shift.startTime, e.shift.endTime) > now
+  );
 }
 
 export function formatHours(hours: number): string {
