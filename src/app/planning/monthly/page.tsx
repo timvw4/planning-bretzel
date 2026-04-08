@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -12,6 +12,8 @@ import {
   Maximize2,
   Eraser,
   Lock,
+  Users,
+  ChevronDown,
 } from 'lucide-react';
 import {
   format,
@@ -30,6 +32,14 @@ import { fr } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { usePlanningStore } from '@/lib/store';
 import { formatDate, formatHours, getInitials, calcPickerPosition } from '@/lib/utils';
@@ -67,7 +77,9 @@ export default function MonthlyPlanningPage() {
   const [zoomIdx, setZoomIdx]       = useState(DEFAULT_ZOOM);
   const [activeCell, setActiveCell] = useState<{ empId: string; date: string } | null>(null);
   const [pickerPos,  setPickerPos]  = useState<{ x: number; y: number } | null>(null);
-  const [filterEmployee, setFilterEmployee] = useState<string>('all');
+  /** 'all' = tous les employés actifs du mois ; 'subset' = liste dans selectedEmployeeIds */
+  const [employeeFilterMode, setEmployeeFilterMode] = useState<'all' | 'subset'>('all');
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   // ── Mode pinceau : shift sélectionné pour assignation rapide ─
   const [brushShiftId, setBrushShiftId] = useState<string | null>(null);
   // ── Mode gomme : clic sur une case pour effacer son shift ────
@@ -96,12 +108,114 @@ export default function MonthlyPlanningPage() {
   const monthEndStr   = format(monthEnd,   'yyyy-MM-dd');
   const isLocked      = isMonthLocked(monthKey);
 
-  const activeEmployees   = employees.filter(
-    (e) => e.isActive && !(e.inactiveMonths ?? []).includes(monthKey)
+  // Mémorisé : un simple .filter() recréerait un nouveau tableau à chaque rendu et
+  // relancerait en boucle le useEffect qui nettoie selectedEmployeeIds (Maximum update depth).
+  const activeEmployees = useMemo(
+    () =>
+      employees.filter(
+        (e) => e.isActive && !(e.inactiveMonths ?? []).includes(monthKey)
+      ),
+    [employees, monthKey]
   );
-  const displayedEmployees = filterEmployee === 'all'
-    ? activeEmployees
-    : activeEmployees.filter((e) => e.id === filterEmployee);
+  const employeesForFilterMenu = useMemo(
+    () =>
+      [...activeEmployees].sort((a, b) =>
+        a.firstName.localeCompare(b.firstName, 'fr', { sensitivity: 'base' })
+      ),
+    [activeEmployees]
+  );
+
+  const displayedEmployees = useMemo(() => {
+    if (employeeFilterMode === 'all') return activeEmployees;
+    const sel = new Set(selectedEmployeeIds);
+    return activeEmployees.filter((e) => sel.has(e.id));
+  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
+
+  const filterSummaryTitle = useMemo(() => {
+    const list =
+      employeeFilterMode === 'all'
+        ? activeEmployees
+        : activeEmployees.filter((e) => selectedEmployeeIds.includes(e.id));
+    return list
+      .map((e) => `${e.firstName}${e.lastName ? ` ${e.lastName}` : ''}`.trim())
+      .join(', ');
+  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
+
+  const filterSummaryLabel = useMemo(() => {
+    const n = activeEmployees.length;
+    if (n === 0) return 'Aucun employé actif';
+    if (employeeFilterMode === 'all') return `Tous les employés (${n})`;
+    const k = selectedEmployeeIds.length;
+    if (k === 0) return `Tous les employés (${n})`;
+    if (k === 1) {
+      const e = activeEmployees.find((x) => x.id === selectedEmployeeIds[0]);
+      return e
+        ? `${e.firstName}${e.lastName ? ` ${e.lastName}` : ''}`.trim()
+        : '1 employé';
+    }
+    return `${k} employés`;
+  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
+
+  useEffect(() => {
+    if (employeeFilterMode !== 'subset') return;
+    const valid = new Set(activeEmployees.map((e) => e.id));
+    setSelectedEmployeeIds((prev) => {
+      const pruned = prev.filter((id) => valid.has(id));
+      if (pruned.length === 0 && activeEmployees.length > 0) {
+        queueMicrotask(() => setEmployeeFilterMode('all'));
+        return [];
+      }
+      if (
+        pruned.length === activeEmployees.length &&
+        activeEmployees.length > 0 &&
+        activeEmployees.every((e) => pruned.includes(e.id))
+      ) {
+        queueMicrotask(() => setEmployeeFilterMode('all'));
+        return [];
+      }
+      return pruned;
+    });
+  }, [activeEmployees, monthKey, employeeFilterMode]);
+
+  const isEmployeeRowChecked = (id: string) =>
+    employeeFilterMode === 'all' || selectedEmployeeIds.includes(id);
+
+  const handleToggleAllEmployees = (checked: boolean) => {
+    if (checked) {
+      setEmployeeFilterMode('all');
+      setSelectedEmployeeIds([]);
+    } else {
+      setEmployeeFilterMode('subset');
+      setSelectedEmployeeIds(activeEmployees.map((e) => e.id));
+    }
+  };
+
+  const handleToggleOneEmployee = (id: string, checked: boolean) => {
+    if (employeeFilterMode === 'all') {
+      if (!checked) {
+        setEmployeeFilterMode('subset');
+        setSelectedEmployeeIds(activeEmployees.map((e) => e.id).filter((x) => x !== id));
+      }
+      return;
+    }
+    if (checked) {
+      const next = Array.from(new Set([...selectedEmployeeIds, id]));
+      if (next.length === activeEmployees.length) {
+        setEmployeeFilterMode('all');
+        setSelectedEmployeeIds([]);
+      } else {
+        setSelectedEmployeeIds(next);
+      }
+    } else {
+      const next = selectedEmployeeIds.filter((x) => x !== id);
+      if (next.length === 0) {
+        setEmployeeFilterMode('all');
+        setSelectedEmployeeIds([]);
+      } else {
+        setSelectedEmployeeIds(next);
+      }
+    }
+  };
 
   const shiftMap = new Map(shifts.map((s) => [s.id, s]));
 
@@ -233,12 +347,29 @@ export default function MonthlyPlanningPage() {
 
   const handleExportExcel = async () => {
     const { exportToExcel } = await import('@/lib/export');
-    await exportToExcel(employees, shifts, scheduleEntries, exportStartStr, exportEndStr, settings.companyName, monthStartStr);
+    await exportToExcel(
+      displayedEmployees,
+      shifts,
+      scheduleEntries,
+      exportStartStr,
+      exportEndStr,
+      settings.companyName,
+      monthStartStr
+    );
     toast.success('Planning exporté en Excel');
   };
   const handleExportPDF = async () => {
     const { exportToPDF } = await import('@/lib/export');
-    await exportToPDF(employees, shifts, scheduleEntries, exportStartStr, exportEndStr, settings.companyName, monthStartStr, settings.holidays ?? []);
+    await exportToPDF(
+      displayedEmployees,
+      shifts,
+      scheduleEntries,
+      exportStartStr,
+      exportEndStr,
+      settings.companyName,
+      monthStartStr,
+      settings.holidays ?? []
+    );
     toast.success('PDF téléchargé — vérifiez votre dossier Téléchargements');
   };
 
@@ -253,19 +384,61 @@ export default function MonthlyPlanningPage() {
         subtitle={formatDate(currentMonth, 'MMMM yyyy')}
         actions={
           <div className="flex items-center gap-2">
-            {/* Filtre employé */}
-            <select
-              value={filterEmployee}
-              onChange={(e) => setFilterEmployee(e.target.value)}
-              className="h-9 text-sm border border-slate-200 rounded-lg px-3 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="all">Tous les employés</option>
-              {activeEmployees.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.firstName} {e.lastName}
-                </option>
-              ))}
-            </select>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 min-w-[11rem] max-w-[min(100%,16rem)] justify-between gap-2 font-normal px-3"
+                  title={filterSummaryTitle || undefined}
+                  disabled={activeEmployees.length === 0}
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <Users className="h-4 w-4 shrink-0 text-slate-500" />
+                    <span className="truncate text-left text-sm text-slate-700">
+                      {filterSummaryLabel}
+                    </span>
+                  </span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80 max-h-80 overflow-y-auto">
+                <DropdownMenuLabel className="text-xs font-semibold text-slate-500">
+                  Employés affichés
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={employeeFilterMode === 'all'}
+                  onCheckedChange={handleToggleAllEmployees}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  Tous les employés ({activeEmployees.length})
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                {employeesForFilterMenu.map((e) => (
+                  <DropdownMenuCheckboxItem
+                    key={e.id}
+                    checked={isEmployeeRowChecked(e.id)}
+                    onCheckedChange={(c) => handleToggleOneEmployee(e.id, c === true)}
+                    onSelect={(ev) => ev.preventDefault()}
+                  >
+                    <span className="flex items-center gap-2 min-w-0 flex-1">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0 ring-1 ring-black/5"
+                        style={{ backgroundColor: e.color }}
+                      />
+                      <span className="truncate">
+                        {e.firstName}
+                        {e.lastName ? ` ${e.lastName}` : ''}
+                      </span>
+                      <span className="text-[10px] text-slate-400 ml-auto shrink-0 tabular-nums">
+                        {getInitials(e.firstName, e.lastName)}
+                      </span>
+                    </span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             {/* Exports */}
             <Button variant="outline" size="sm" onClick={handleExportExcel}>

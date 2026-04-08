@@ -7,7 +7,6 @@ const STATIC_ASSETS = [
   '/employee',
   '/employee/availability',
   '/manifest.json',
-  '/icon-192.png',
   '/icon-512.png',
   '/apple-touch-icon.png',
 ];
