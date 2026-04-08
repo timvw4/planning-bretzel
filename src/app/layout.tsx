@@ -22,10 +22,8 @@ export const metadata: Metadata = {
   },
   icons: {
     apple: '/apple-touch-icon.png',
-    icon: [
-      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
-      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
-    ],
+    icon: '/icon-512.png',
+    shortcut: '/icon-512.png',
   },
 };
 
@@ -42,6 +40,8 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="Bretzel Planning" />
+        <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
+        <link rel="shortcut icon" href="/icon-512.png" />
       </head>
       <body className="font-sans antialiased bg-slate-50 text-slate-900">
         <AppLayout>{children}</AppLayout>
