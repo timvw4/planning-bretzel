@@ -110,13 +110,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         'flex items-center border-b border-slate-100 transition-all duration-300',
         collapsed ? 'justify-center px-0 py-5' : 'gap-3 px-4 py-5'
       )}>
-        <div className="w-12 h-12 rounded-xl overflow-hidden shadow-sm shrink-0 ring-1 ring-slate-200/80">
+        {/* Pas d’ombre (shadow) : elle faisait un trait sombre en bas à droite. object-contain : le PNG a souvent du blanc autour du vert. */}
+        <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 bg-white ring-1 ring-slate-200/60">
           <Image
             src="/icon-512.png"
             alt="Logo Bretzel"
             width={48}
             height={48}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-contain"
             priority
           />
         </div>
