@@ -13,6 +13,8 @@ import {
   Eraser,
   Lock,
   Send,
+  UsersRound,
+  ChevronDown,
 } from 'lucide-react';
 import {
   format,
@@ -41,8 +43,17 @@ import {
 import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
 import { usePlanningStore } from '@/lib/store';
+import { useShallow } from 'zustand/react/shallow';
 import { formatDate, formatHours, getInitials, calcPickerPosition } from '@/lib/utils';
-import { PlanningAlert } from '@/lib/types';
+import { Employee, PlanningAlert } from '@/lib/types';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 export default function WeeklyPlanningPage() {
   const {
@@ -58,7 +69,24 @@ export default function WeeklyPlanningPage() {
     isMonthLocked,
     settings,
     publishWeekForEmployees,
-  } = usePlanningStore();
+    groups,
+  } = usePlanningStore(
+    useShallow((s) => ({
+      employees: s.employees,
+      shifts: s.shifts,
+      scheduleEntries: s.scheduleEntries,
+      assignShift: s.assignShift,
+      removeShift: s.removeShift,
+      getWeeklyHours: s.getWeeklyHours,
+      copyWeek: s.copyWeek,
+      alerts: s.alerts,
+      resolveAlert: s.resolveAlert,
+      isMonthLocked: s.isMonthLocked,
+      settings: s.settings,
+      publishWeekForEmployees: s.publishWeekForEmployees,
+      groups: s.groups,
+    }))
+  );
 
   const [currentWeekDate, setCurrentWeekDate] = useState(new Date());
   const [activeCell, setActiveCell] = useState<{ empId: string; date: string } | null>(null);
@@ -69,6 +97,8 @@ export default function WeeklyPlanningPage() {
   const [eraseMode, setEraseMode] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishSubmitting, setPublishSubmitting] = useState(false);
+  /** Groupe sélectionné pour filtrer (null = tous les groupes) */
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
 
   const weekStart = startOfWeek(currentWeekDate, { weekStartsOn: 1 });
@@ -83,6 +113,48 @@ export default function WeeklyPlanningPage() {
   const activeEmployees = employees.filter(
     (e) => e.isActive && !(e.inactiveMonths ?? []).includes(weekMonthKey)
   );
+
+  const displayedEmployees = selectedGroupId
+    ? (() => {
+        const grp = groups.find((g) => g.id === selectedGroupId);
+        if (!grp) return activeEmployees;
+        const memberSet = new Set(grp.memberIds);
+        return activeEmployees.filter((e) => memberSet.has(e.id));
+      })()
+    : activeEmployees;
+
+  /** Lignes du tableau : séparateurs de groupe + lignes employé */
+  const groupedRows = (() => {
+    type SepRow = { type: 'separator'; groupName: string };
+    type EmpRow = { type: 'employee'; employee: Employee; idx: number };
+    const rows: (SepRow | EmpRow)[] = [];
+
+    if (selectedGroupId !== null || groups.length === 0) {
+      displayedEmployees.forEach((e, i) => rows.push({ type: 'employee', employee: e, idx: i }));
+      return rows;
+    }
+
+    const assignedIds = new Set<string>();
+    let empIdx = 0;
+    for (const grp of groups) {
+      const members = displayedEmployees.filter((e) => grp.memberIds.includes(e.id));
+      if (members.length === 0) continue;
+      rows.push({ type: 'separator', groupName: grp.name });
+      for (const emp of members) {
+        rows.push({ type: 'employee', employee: emp, idx: empIdx++ });
+        assignedIds.add(emp.id);
+      }
+    }
+    const ungrouped = displayedEmployees.filter((e) => !assignedIds.has(e.id));
+    if (ungrouped.length > 0) {
+      if (rows.length > 0) rows.push({ type: 'separator', groupName: 'Sans groupe' });
+      for (const emp of ungrouped) {
+        rows.push({ type: 'employee', employee: emp, idx: empIdx++ });
+      }
+    }
+    return rows;
+  })();
+
   const shiftMap = new Map(shifts.map((s) => [s.id, s]));
 
   // ── Map des jours fériés : "yyyy-MM-dd" -> nom ───────────────
@@ -217,8 +289,8 @@ export default function WeeklyPlanningPage() {
     : null;
   const activeEmployee = activeCell ? employees.find((e) => e.id === activeCell.empId) : null;
 
-  // Calcul total heures semaine global
-  const totalWeekHours = activeEmployees.reduce((sum, emp) => {
+  // Calcul total heures semaine global (sur les employés affichés)
+  const totalWeekHours = displayedEmployees.reduce((sum, emp) => {
     return sum + getWeeklyHours(emp.id, weekStartStr, weekEndStr);
   }, 0);
 
@@ -235,6 +307,58 @@ export default function WeeklyPlanningPage() {
         subtitle={`Semaine du ${formatDate(weekStartStr)} au ${formatDate(weekEndStr)}`}
         actions={
           <div className="flex items-center gap-2">
+            {/* Filtre par groupe */}
+            {groups.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 min-w-[9rem] max-w-[min(100%,14rem)] justify-between gap-2 font-normal px-3"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <UsersRound className="h-4 w-4 shrink-0 text-slate-500" />
+                      <span className="truncate text-left text-sm text-slate-700">
+                        {selectedGroupId
+                          ? (groups.find((g) => g.id === selectedGroupId)?.name ?? 'Groupe')
+                          : 'Tous les groupes'}
+                      </span>
+                    </span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel className="text-xs font-semibold text-slate-500">
+                    Filtrer par groupe
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={selectedGroupId === null}
+                    onCheckedChange={() => setSelectedGroupId(null)}
+                    onSelect={(e) => e.preventDefault()}
+                  >
+                    Tous les groupes
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuSeparator />
+                  {groups.map((g) => (
+                    <DropdownMenuCheckboxItem
+                      key={g.id}
+                      checked={selectedGroupId === g.id}
+                      onCheckedChange={() => setSelectedGroupId(g.id)}
+                      onSelect={(e) => e.preventDefault()}
+                    >
+                      <span className="flex items-center justify-between w-full gap-2">
+                        <span>{g.name}</span>
+                        <span className="text-[10px] text-slate-400 shrink-0">
+                          {g.memberIds.length} membre{g.memberIds.length > 1 ? 's' : ''}
+                        </span>
+                      </span>
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+
             {activeAlerts.length > 0 && (
               <button
                 onClick={() => setShowAlerts(!showAlerts)}
@@ -537,14 +661,28 @@ export default function WeeklyPlanningPage() {
             </thead>
 
             <tbody className="divide-y divide-slate-50">
-              {activeEmployees.map((employee, empIdx) => {
+              {groupedRows.map((row, rowIdx) => {
+                if (row.type === 'separator') {
+                  return (
+                    <tr key={`sep-${row.groupName}-${rowIdx}`}>
+                      <td
+                        colSpan={9}
+                        className="px-4 py-1.5 bg-slate-100/80 border-b border-t border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-widest"
+                      >
+                        {row.groupName}
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const { employee, idx: empIdx } = row;
                 const weeklyHours = getWeeklyHours(employee.id, weekStartStr, weekEndStr);
                 const overHours = weeklyHours > employee.contractHours;
                 const empAlertsList = getEmpAlerts(employee.id);
 
                 return (
                   <tr
-                    key={employee.id}
+                    key={`${employee.id}-${rowIdx}`}
                     className={`group ${empIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/20'} hover:bg-indigo-50/10 transition-colors`}
                   >
                     {/* Infos employé */}
@@ -689,7 +827,7 @@ export default function WeeklyPlanningPage() {
                 </td>
                 {weekDays.map((day) => {
                   const dateStr = format(day, 'yyyy-MM-dd');
-                  const dayTotal = activeEmployees.reduce((sum, emp) => {
+                  const dayTotal = displayedEmployees.reduce((sum, emp) => {
                     const entry = scheduleEntries.find(
                       (e) => e.employeeId === emp.id && e.date === dateStr
                     );

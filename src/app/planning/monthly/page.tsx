@@ -13,6 +13,7 @@ import {
   Eraser,
   Lock,
   Users,
+  UsersRound,
   ChevronDown,
   Send,
 } from 'lucide-react';
@@ -52,6 +53,8 @@ import {
 import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
 import { usePlanningStore } from '@/lib/store';
+import { useShallow } from 'zustand/react/shallow';
+import { Employee } from '@/lib/types';
 import { formatDate, formatHours, getInitials, calcPickerPosition } from '@/lib/utils';
 
 // ── Niveaux de zoom ──────────────────────────────────────────
@@ -79,7 +82,22 @@ export default function MonthlyPlanningPage() {
     settings,
     isMonthLocked,
     publishMonthForEmployees,
-  } = usePlanningStore();
+    groups,
+  } = usePlanningStore(
+    useShallow((s) => ({
+      employees: s.employees,
+      shifts: s.shifts,
+      scheduleEntries: s.scheduleEntries,
+      assignShift: s.assignShift,
+      removeShift: s.removeShift,
+      getMonthlyHours: s.getMonthlyHours,
+      alerts: s.alerts,
+      settings: s.settings,
+      isMonthLocked: s.isMonthLocked,
+      publishMonthForEmployees: s.publishMonthForEmployees,
+      groups: s.groups,
+    }))
+  );
 
   // ── Map des jours fériés : "yyyy-MM-dd" -> nom ───────────────
   const holidayMap = new Map((settings.holidays ?? []).map((h) => [h.date, h.name]));
@@ -91,6 +109,8 @@ export default function MonthlyPlanningPage() {
   /** 'all' = tous les employés actifs du mois ; 'subset' = liste dans selectedEmployeeIds */
   const [employeeFilterMode, setEmployeeFilterMode] = useState<'all' | 'subset'>('all');
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
+  /** Groupe sélectionné pour filtrer (null = tous les groupes) */
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   // ── Mode pinceau : shift sélectionné pour assignation rapide ─
   const [brushShiftId, setBrushShiftId] = useState<string | null>(null);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
@@ -139,10 +159,51 @@ export default function MonthlyPlanningPage() {
   );
 
   const displayedEmployees = useMemo(() => {
-    if (employeeFilterMode === 'all') return activeEmployees;
-    const sel = new Set(selectedEmployeeIds);
-    return activeEmployees.filter((e) => sel.has(e.id));
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
+    let base =
+      employeeFilterMode === 'all'
+        ? activeEmployees
+        : activeEmployees.filter((e) => new Set(selectedEmployeeIds).has(e.id));
+    if (selectedGroupId) {
+      const grp = groups.find((g) => g.id === selectedGroupId);
+      if (grp) {
+        const memberSet = new Set(grp.memberIds);
+        base = base.filter((e) => memberSet.has(e.id));
+      }
+    }
+    return base;
+  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees, selectedGroupId, groups]);
+
+  /** Lignes du tableau : séparateurs de groupe + lignes employé */
+  const groupedRows = useMemo(() => {
+    type SepRow = { type: 'separator'; groupName: string };
+    type EmpRow = { type: 'employee'; employee: Employee; idx: number };
+    const rows: (SepRow | EmpRow)[] = [];
+
+    if (selectedGroupId !== null || groups.length === 0) {
+      displayedEmployees.forEach((e, i) => rows.push({ type: 'employee', employee: e, idx: i }));
+      return rows;
+    }
+
+    const assignedIds = new Set<string>();
+    let empIdx = 0;
+    for (const grp of groups) {
+      const members = displayedEmployees.filter((e) => grp.memberIds.includes(e.id));
+      if (members.length === 0) continue;
+      rows.push({ type: 'separator', groupName: grp.name });
+      for (const emp of members) {
+        rows.push({ type: 'employee', employee: emp, idx: empIdx++ });
+        assignedIds.add(emp.id);
+      }
+    }
+    const ungrouped = displayedEmployees.filter((e) => !assignedIds.has(e.id));
+    if (ungrouped.length > 0) {
+      if (rows.length > 0) rows.push({ type: 'separator', groupName: 'Sans groupe' });
+      for (const emp of ungrouped) {
+        rows.push({ type: 'employee', employee: emp, idx: empIdx++ });
+      }
+    }
+    return rows;
+  }, [displayedEmployees, groups, selectedGroupId]);
 
   const filterSummaryTitle = useMemo(() => {
     const list =
@@ -415,6 +476,58 @@ export default function MonthlyPlanningPage() {
         subtitle={formatDate(currentMonth, 'MMMM yyyy')}
         actions={
           <div className="flex items-center gap-2">
+            {/* Filtre par groupe */}
+            {groups.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 min-w-[9rem] max-w-[min(100%,14rem)] justify-between gap-2 font-normal px-3"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <UsersRound className="h-4 w-4 shrink-0 text-slate-500" />
+                      <span className="truncate text-left text-sm text-slate-700">
+                        {selectedGroupId
+                          ? (groups.find((g) => g.id === selectedGroupId)?.name ?? 'Groupe')
+                          : 'Tous les groupes'}
+                      </span>
+                    </span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel className="text-xs font-semibold text-slate-500">
+                    Filtrer par groupe
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={selectedGroupId === null}
+                    onCheckedChange={() => setSelectedGroupId(null)}
+                    onSelect={(e) => e.preventDefault()}
+                  >
+                    Tous les groupes
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuSeparator />
+                  {groups.map((g) => (
+                    <DropdownMenuCheckboxItem
+                      key={g.id}
+                      checked={selectedGroupId === g.id}
+                      onCheckedChange={() => setSelectedGroupId(g.id)}
+                      onSelect={(e) => e.preventDefault()}
+                    >
+                      <span className="flex items-center justify-between w-full gap-2">
+                        <span>{g.name}</span>
+                        <span className="text-[10px] text-slate-400 shrink-0">
+                          {g.memberIds.length} membre{g.memberIds.length > 1 ? 's' : ''}
+                        </span>
+                      </span>
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -781,7 +894,21 @@ export default function MonthlyPlanningPage() {
 
             {/* ── Corps du tableau ───────────────────────────── */}
             <tbody>
-              {displayedEmployees.map((employee, empIdx) => {
+              {groupedRows.map((row, rowIdx) => {
+                if (row.type === 'separator') {
+                  return (
+                    <tr key={`sep-${row.groupName}-${rowIdx}`}>
+                      <td
+                        colSpan={monthDays.length + 2}
+                        className="sticky left-0 px-4 py-1.5 bg-slate-100/80 border-b border-t border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-widest"
+                      >
+                        {row.groupName}
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const { employee, idx: empIdx } = row;
                 const monthlyHours = getMonthlyHours(employee.id, monthStartStr, monthEndStr);
                 const overHours    = monthlyHours > employee.contractHours * 4.33;
                 const empAlerts    = alerts.filter((a) => !a.resolved && a.employeeId === employee.id);
@@ -789,7 +916,7 @@ export default function MonthlyPlanningPage() {
 
                 return (
                   <tr
-                    key={employee.id}
+                    key={`${employee.id}-${rowIdx}`}
                     className={`group/row border-b border-slate-100 hover:brightness-[0.98] transition-all ${
                       isEven ? 'bg-white' : 'bg-slate-50/60'
                     }`}

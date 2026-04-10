@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
   Users,
+  UsersRound,
   Clock,
   CalendarDays,
   CalendarRange,
@@ -42,6 +43,7 @@ const navigation = [
     label: 'Gestion',
     items: [
       { name: 'Employés', href: '/employees', icon: Users },
+      { name: 'Groupes', href: '/groups', icon: UsersRound },
       { name: 'Shifts', href: '/shifts', icon: Clock },
       { name: 'Disponibilités', href: '/availability', icon: CalendarCheck },
       { name: 'Validation', href: '/validation', icon: ShieldCheck },
@@ -110,14 +112,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         'flex items-center border-b border-slate-100 transition-all duration-300',
         collapsed ? 'justify-center px-0 py-5' : 'gap-3 px-4 py-5'
       )}>
-        {/* Pas d’ombre (shadow) : elle faisait un trait sombre en bas à droite. object-contain : le PNG a souvent du blanc autour du vert. */}
-        <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 bg-white ring-1 ring-slate-200/60">
+        {/* Zoom léger pour rogner les marges blanches du PNG ; overflow masque l’excédent. */}
+        <div className="w-14 h-14 rounded-xl overflow-hidden shrink-0 ring-1 ring-slate-200/50">
           <Image
-            src="/icon-512.png"
+            src="/logo-sidebar.png"
             alt="Logo Bretzel"
-            width={48}
-            height={48}
-            className="h-full w-full object-contain"
+            width={56}
+            height={56}
+            className="h-full w-full origin-center object-cover scale-[1.32]"
             priority
           />
         </div>

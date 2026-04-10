@@ -4,7 +4,7 @@
 // ============================================================
 
 import { createClient } from './client';
-import { Employee, Shift, ScheduleEntry, AppSettings } from '@/lib/types';
+import { Employee, Shift, ScheduleEntry, AppSettings, EmployeeGroup } from '@/lib/types';
 import { format, parse, startOfMonth, endOfMonth } from 'date-fns';
 
 // ── Conversions Supabase (snake_case) ↔ App (camelCase) ──────
@@ -366,5 +366,56 @@ export const db = {
       employeeId: r.employee_id as string,
       monthKey: r.month_key as string,
     }));
+  },
+
+  // ── Groupes d'employés ─────────────────────────────────────
+  async getGroups(): Promise<EmployeeGroup[]> {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from('employee_groups')
+      .select('id, name, created_at, employee_group_members(employee_id)')
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (data ?? []).map((row: any) => ({
+      id: row.id as string,
+      name: row.name as string,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      memberIds: ((row.employee_group_members ?? []) as any[]).map((m: any) => m.employee_id as string),
+      createdAt: row.created_at ? format(new Date(row.created_at), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'),
+    }));
+  },
+
+  async upsertGroup(g: Pick<EmployeeGroup, 'id' | 'name'>): Promise<void> {
+    const supabase = createClient();
+    const { error } = await supabase
+      .from('employee_groups')
+      .upsert({ id: g.id, name: g.name });
+    if (error) throw error;
+  },
+
+  async deleteGroup(id: string): Promise<void> {
+    const supabase = createClient();
+    const { error } = await supabase
+      .from('employee_groups')
+      .delete()
+      .eq('id', id);
+    if (error) throw error;
+  },
+
+  async setGroupMembers(groupId: string, memberIds: string[]): Promise<void> {
+    const supabase = createClient();
+    // Supprimer les anciens membres, puis insérer les nouveaux
+    const { error: delError } = await supabase
+      .from('employee_group_members')
+      .delete()
+      .eq('group_id', groupId);
+    if (delError) throw delError;
+    if (memberIds.length === 0) return;
+    const rows = memberIds.map((employeeId) => ({ group_id: groupId, employee_id: employeeId }));
+    const { error: insError } = await supabase
+      .from('employee_group_members')
+      .insert(rows);
+    if (insError) throw insError;
   },
 };

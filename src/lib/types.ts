@@ -127,3 +127,10 @@ export interface PlanningCell {
   shift?: Shift;
   alerts: PlanningAlert[];
 }
+
+export interface EmployeeGroup {
+  id: string;
+  name: string;
+  memberIds: string[];
+  createdAt: string;
+}

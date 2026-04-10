@@ -5,7 +5,7 @@
 // ============================================================
 
 import { create } from 'zustand';
-import { Employee, Shift, ScheduleEntry, AppSettings, PlanningAlert } from './types';
+import { Employee, Shift, ScheduleEntry, AppSettings, PlanningAlert, EmployeeGroup } from './types';
 import { defaultSettings } from '@/data/mock';
 import { buildPlanningAlerts, getAvailabilityFetchRange } from './utils';
 import { db } from '@/lib/supabase/db';
@@ -19,6 +19,7 @@ interface PlanningStore {
   settings: AppSettings;
   alerts: PlanningAlert[];
   lockedMonths: string[];
+  groups: EmployeeGroup[];
   isLoading: boolean;
 
   // ---- Vue planning ----
@@ -26,6 +27,12 @@ interface PlanningStore {
 
   // ---- Chargement depuis Supabase ----
   loadData: () => Promise<void>;
+
+  // ---- Actions Groupes ----
+  addGroup: (name: string) => void;
+  updateGroup: (id: string, name: string) => void;
+  deleteGroup: (id: string) => void;
+  setGroupMembers: (groupId: string, memberIds: string[]) => void;
 
   // ---- Actions Employés ----
   addEmployee: (employee: Omit<Employee, 'id' | 'createdAt'>) => void;
@@ -79,6 +86,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
   settings: defaultSettings,
   alerts: [],
   lockedMonths: [],
+  groups: [],
   isLoading: true,
   currentDate: format(new Date(), 'yyyy-MM-dd'),
 
@@ -86,12 +94,13 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
   loadData: async () => {
     set({ isLoading: true });
     try {
-      const [employees, shifts, entries, settings, lockedMonths] = await Promise.all([
+      const [employees, shifts, entries, settings, lockedMonths, groups] = await Promise.all([
         db.getEmployees(),
         db.getShifts(),
         db.getScheduleEntries(),
         db.getSettings(),
         db.getLockedMonths(),
+        db.getGroups().catch(() => [] as EmployeeGroup[]),
       ]);
 
       const today = new Date();
@@ -125,6 +134,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         scheduleEntries: entries,
         settings: settings ?? defaultSettings,
         lockedMonths,
+        groups,
         alerts,
         isLoading: false,
       });
@@ -132,6 +142,39 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       console.error('Erreur lors du chargement des données:', error);
       set({ isLoading: false });
     }
+  },
+
+  // ---- Groupes ────────────────────────────────────────────
+  addGroup: (name) => {
+    const newGroup: EmployeeGroup = {
+      id: crypto.randomUUID(),
+      name,
+      memberIds: [],
+      createdAt: format(new Date(), 'yyyy-MM-dd'),
+    };
+    set((state) => ({ groups: [...state.groups, newGroup] }));
+    db.upsertGroup({ id: newGroup.id, name: newGroup.name }).catch(console.error);
+  },
+
+  updateGroup: (id, name) => {
+    set((state) => ({
+      groups: state.groups.map((g) => (g.id === id ? { ...g, name } : g)),
+    }));
+    db.upsertGroup({ id, name }).catch(console.error);
+  },
+
+  deleteGroup: (id) => {
+    set((state) => ({ groups: state.groups.filter((g) => g.id !== id) }));
+    db.deleteGroup(id).catch(console.error);
+  },
+
+  setGroupMembers: (groupId, memberIds) => {
+    set((state) => ({
+      groups: state.groups.map((g) =>
+        g.id === groupId ? { ...g, memberIds } : g
+      ),
+    }));
+    db.setGroupMembers(groupId, memberIds).catch(console.error);
   },
 
   // ---- Employés ───────────────────────────────────────────

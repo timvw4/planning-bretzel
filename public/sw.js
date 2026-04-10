@@ -1,5 +1,5 @@
 // Service Worker — Bretzel Planning PWA
-const CACHE_NAME = 'bretzel-planning-v1';
+const CACHE_NAME = 'bretzel-planning-v2';
 
 // Fichiers à mettre en cache lors de l'installation
 const STATIC_ASSETS = [
@@ -8,6 +8,7 @@ const STATIC_ASSETS = [
   '/employee/availability',
   '/manifest.json',
   '/icon-512.png',
+  '/logo-sidebar.png',
   '/apple-touch-icon.png',
 ];
 
