@@ -898,12 +898,18 @@ export default function MonthlyPlanningPage() {
                 if (row.type === 'separator') {
                   return (
                     <tr key={`sep-${row.groupName}-${rowIdx}`}>
+                      {/* Colonne groupe : même largeur et sticky que la colonne employés */}
                       <td
-                        colSpan={monthDays.length + 2}
-                        className="sticky left-0 px-4 py-1.5 bg-slate-100/80 border-b border-t border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-widest"
+                        className="sticky left-0 z-20 border-r border-slate-200 px-3 py-1.5 bg-slate-100/95 shadow-[2px_0_4px_rgba(0,0,0,0.04)] text-[10px] font-bold text-slate-500 uppercase tracking-widest"
+                        style={{ width: empColW, minWidth: empColW }}
                       >
                         {row.groupName}
                       </td>
+                      {/* Bandeau sur le reste du tableau (jours + total) */}
+                      <td
+                        colSpan={monthDays.length + 1}
+                        className="bg-slate-100/80 border-b border-t border-slate-200"
+                      />
                     </tr>
                   );
                 }

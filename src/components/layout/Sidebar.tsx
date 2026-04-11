@@ -18,6 +18,7 @@ import {
   CalendarCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  ClipboardList,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePlanningStore } from '@/lib/store';
@@ -46,6 +47,7 @@ const navigation = [
       { name: 'Groupes', href: '/groups', icon: UsersRound },
       { name: 'Shifts', href: '/shifts', icon: Clock },
       { name: 'Disponibilités', href: '/availability', icon: CalendarCheck },
+      { name: 'Feuilles d\'heures', href: '/timesheets', icon: ClipboardList },
       { name: 'Validation', href: '/validation', icon: ShieldCheck },
     ],
   },
@@ -70,16 +72,24 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   );
   const activeAlerts = alerts.filter((a) => !a.resolved);
   const [pendingUnlockCount, setPendingUnlockCount] = useState(0);
+  const [pendingTimesheetCount, setPendingTimesheetCount] = useState(0);
 
   useEffect(() => {
     const supabase = createClient();
     const fetchPending = async () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      const { count } = await supabase
-        .from('availability_unlock_requests')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'pending');
-      setPendingUnlockCount(count ?? 0);
+      const [{ count: unlockCount }, { count: timesheetCount }] = await Promise.all([
+        supabase
+          .from('availability_unlock_requests')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'pending'),
+        supabase
+          .from('time_declarations')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'pending'),
+      ]);
+      setPendingUnlockCount(unlockCount ?? 0);
+      setPendingTimesheetCount(timesheetCount ?? 0);
     };
     void fetchPending();
     const onVisible = () => {
@@ -149,8 +159,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 const isActive = pathname === item.href;
                 const showBadge = item.href === '/' && activeAlerts.length > 0;
                 const showAvailBadge = item.href === '/availability' && pendingUnlockCount > 0;
-                const hasBadge = showBadge || showAvailBadge;
-                const badgeCount = showBadge ? activeAlerts.length : pendingUnlockCount;
+                const showTimesheetBadge = item.href === '/timesheets' && pendingTimesheetCount > 0;
+                const hasBadge = showBadge || showAvailBadge || showTimesheetBadge;
+                const badgeCount = showBadge ? activeAlerts.length : showAvailBadge ? pendingUnlockCount : pendingTimesheetCount;
                 const badgeColor = showBadge ? 'bg-red-500' : 'bg-amber-500';
 
                 return (

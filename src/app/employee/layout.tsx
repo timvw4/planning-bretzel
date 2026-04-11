@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { Loader2, Calendar, ClipboardList, LogOut, Building2 } from 'lucide-react';
+import { Loader2, Calendar, ClipboardList, Clock, LogOut, Building2 } from 'lucide-react';
 import Link from 'next/link';
 import { Toaster } from 'react-hot-toast';
 
@@ -105,6 +105,7 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
   const navItems = [
     { href: '/employee', label: 'Mon planning', icon: Calendar },
     { href: '/employee/availability', label: 'Mes disponibilités', icon: ClipboardList },
+    { href: '/employee/timesheets', label: 'Mes heures', icon: Clock },
   ];
 
   return (
@@ -168,10 +169,14 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex-1 flex flex-col items-center gap-1 py-2.5 text-[11px] font-semibold transition-colors ${
+                className={`flex-1 flex flex-col items-center gap-1 py-2.5 text-[11px] font-semibold transition-colors relative ${
                   isActive ? 'text-indigo-600' : 'text-slate-400'
                 }`}
               >
+                {/* Barre indicatrice animée sur le lien actif */}
+                {isActive && (
+                  <span className="absolute top-0 left-1/4 right-1/4 h-0.5 rounded-full bg-indigo-600 animate-fade-in" />
+                )}
                 <item.icon className="w-4 h-4" />
                 {item.label}
               </Link>
@@ -180,9 +185,11 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
         </div>
       </header>
 
-      {/* Contenu */}
+      {/* Contenu — key={pathname} recrée le nœud à chaque changement de page → déclenche le fade */}
       <main className="max-w-3xl mx-auto px-4 py-6">
-        {children}
+        <div key={pathname} className="animate-fade-in">
+          {children}
+        </div>
       </main>
 
       <Toaster

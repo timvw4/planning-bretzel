@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
   format,
@@ -39,14 +39,72 @@ const WEEK_DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 
 type CalendarView = 'month' | 'week';
 
+// ── Squelettes de chargement ─────────────────────────────────
+function StatsSkeleton() {
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="bg-white rounded-2xl border border-slate-100 p-4 space-y-2">
+          <div className="h-3 w-14 rounded-full animate-shimmer" />
+          <div className="h-7 w-10 rounded-lg animate-shimmer" />
+          <div className="h-2.5 w-16 rounded-full animate-shimmer" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CalendarSkeleton() {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+      {/* En-tête */}
+      <div className="px-4 py-4 border-b border-slate-100 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="h-8 w-8 rounded-xl animate-shimmer" />
+          <div className="h-5 w-36 rounded-full animate-shimmer" />
+          <div className="h-8 w-8 rounded-xl animate-shimmer" />
+        </div>
+        <div className="flex justify-center">
+          <div className="h-8 w-44 rounded-xl animate-shimmer" />
+        </div>
+      </div>
+      {/* Jours en-têtes */}
+      <div className="grid grid-cols-7 border-b border-slate-100 bg-slate-50/50">
+        {WEEK_DAYS.map((d) => (
+          <div key={d} className="py-2 flex justify-center">
+            <div className="h-3 w-6 rounded-full animate-shimmer" />
+          </div>
+        ))}
+      </div>
+      {/* Cellules */}
+      <div className="grid grid-cols-7">
+        {Array.from({ length: 35 }).map((_, i) => (
+          <div key={i} className="h-20 border-b border-r border-slate-100 p-1.5">
+            <div className="h-6 w-6 rounded-full animate-shimmer mb-1" />
+            {i % 3 === 0 && <div className="rounded-lg h-10 animate-shimmer" />}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Page principale ──────────────────────────────────────────
 export default function EmployeeSchedulePage() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<CalendarView>('month');
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);       // squelette initial uniquement
+  const [isFetching, setIsFetching] = useState(false); // assombrissement pendant navigation
   const [employeeId, setEmployeeId] = useState<string | null>(null);
-  /** Horloge pour mettre à jour le bandeau « prochain shift » après la fin d’un créneau (sans recharger). */
   const [now, setNow] = useState(() => new Date());
+  /** Clé qui change quand les nouvelles données arrivent → déclenche l'animation */
+  const [calendarKey, setCalendarKey] = useState(0);
+  /** Classe d'animation appliquée lors du changement de clé */
+  const [animClass, setAnimClass] = useState('animate-fade-in');
+  /** Direction capturée au clic, lue quand les données arrivent */
+  const pendingDir = useRef<'left' | 'right' | null>(null);
+  const initialLoadDone = useRef(false);
 
   // Charger l'employeeId depuis le profil connecté
   useEffect(() => {
@@ -62,52 +120,72 @@ export default function EmployeeSchedulePage() {
     });
   }, []);
 
-  // Charger les entrées : plage = union du mois de currentDate et de la semaine (pour la vue semaine sans trou)
-  useEffect(() => {
+  // Charger les entrées : plage = union du mois et de la semaine courante
+  const load = useCallback(async () => {
     if (!employeeId) return;
-    const load = async () => {
+    // Premier chargement → squelette ; navigations suivantes → assombrissement discret
+    if (!initialLoadDone.current) {
       setLoading(true);
-      const supabase = createClient();
-      const monthStart = startOfMonth(currentDate);
-      const monthEnd = endOfMonth(currentDate);
-      const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
-      const weekEnd = endOfWeek(currentDate, { weekStartsOn: 1 });
-      const fetchStart = monthStart < weekStart ? monthStart : weekStart;
-      const fetchEnd = monthEnd > weekEnd ? monthEnd : weekEnd;
-      const start = format(fetchStart, 'yyyy-MM-dd');
-      const end = format(fetchEnd, 'yyyy-MM-dd');
+    } else {
+      setIsFetching(true);
+    }
+    const supabase = createClient();
+    const monthStart = startOfMonth(currentDate);
+    const monthEnd = endOfMonth(currentDate);
+    const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
+    const weekEnd = endOfWeek(currentDate, { weekStartsOn: 1 });
+    const fetchStart = monthStart < weekStart ? monthStart : weekStart;
+    const fetchEnd = monthEnd > weekEnd ? monthEnd : weekEnd;
+    const start = format(fetchStart, 'yyyy-MM-dd');
+    const end = format(fetchEnd, 'yyyy-MM-dd');
 
-      const { data } = await supabase
-        .from('schedule_entries')
-        .select(`date, shifts (id, name, short_name, type, start_time, end_time, color, text_color, duration_hours)`)
-        .eq('employee_id', employeeId)
-        .eq('visible_to_employee', true)
-        .gte('date', start)
-        .lte('date', end)
-        .order('date');
+    const { data } = await supabase
+      .from('schedule_entries')
+      .select(`date, shifts (id, name, short_name, type, start_time, end_time, color, text_color, duration_hours)`)
+      .eq('employee_id', employeeId)
+      .eq('visible_to_employee', true)
+      .gte('date', start)
+      .lte('date', end)
+      .order('date');
 
-      if (data) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        setEntries(data.map((row: any) => ({
-          date: row.date,
-          shift: {
-            id: row.shifts.id,
-            name: row.shifts.name,
-            shortName: row.shifts.short_name,
-            type: row.shifts.type,
-            startTime: row.shifts.start_time ?? '',
-            endTime: row.shifts.end_time ?? '',
-            color: row.shifts.color,
-            textColor: row.shifts.text_color,
-            durationHours: row.shifts.duration_hours ?? 0,
-          },
-        })));
-      }
+    if (data) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      setEntries(data.map((row: any) => ({
+        date: row.date,
+        shift: {
+          id: row.shifts.id,
+          name: row.shifts.name,
+          shortName: row.shifts.short_name,
+          type: row.shifts.type,
+          startTime: row.shifts.start_time ?? '',
+          endTime: row.shifts.end_time ?? '',
+          color: row.shifts.color,
+          textColor: row.shifts.text_color,
+          durationHours: row.shifts.duration_hours ?? 0,
+        },
+      })));
+    }
+
+    // Détermine la classe d'animation selon la direction capturée au clic
+    const dir = pendingDir.current;
+    pendingDir.current = null;
+    setAnimClass(
+      dir === 'left'  ? 'animate-slide-left'  :
+      dir === 'right' ? 'animate-slide-right' :
+      'animate-fade-in'
+    );
+    setCalendarKey((k) => k + 1); // change la clé → remonte la grille → déclenche l'animation
+
+    if (!initialLoadDone.current) {
       setLoading(false);
-    };
-    load();
+      initialLoadDone.current = true;
+    }
+    setIsFetching(false);
   }, [employeeId, currentDate]);
 
+  useEffect(() => { load(); }, [load]);
+
+  // Horloge pour le bandeau "prochain shift"
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(id);
@@ -133,7 +211,7 @@ export default function EmployeeSchedulePage() {
   // Compte non lié à un employé
   if (!loading && employeeId === null) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center px-4">
+      <div className="flex flex-col items-center justify-center py-20 text-center px-4 animate-fade-in">
         <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mb-4">
           <Info className="w-8 h-8 text-amber-500" />
         </div>
@@ -145,8 +223,19 @@ export default function EmployeeSchedulePage() {
     );
   }
 
+  // ── Handlers de navigation ───────────────────────────────────
+  const handlePrev = () => {
+    pendingDir.current = 'right';
+    setCurrentDate((d) => viewMode === 'week' ? addWeeks(d, -1) : addMonths(d, -1));
+  };
+  const handleNext = () => {
+    pendingDir.current = 'left';
+    setCurrentDate((d) => viewMode === 'week' ? addWeeks(d, 1) : addMonths(d, 1));
+  };
+
   const entryMap = new Map(entries.map((e) => [e.date, e]));
-  // Stats : semaine affichée ou mois affiché (selon le toggle)
+
+  // Stats : semaine ou mois selon le toggle
   const entriesForStats =
     viewMode === 'week'
       ? entries.filter((e) => e.date >= weekStartStr && e.date <= weekEndStr)
@@ -156,24 +245,34 @@ export default function EmployeeSchedulePage() {
   const workedDays = entriesForStats.filter((e) => e.shift.type === 'work').length;
   const offDays = entriesForStats.filter((e) => e.shift.type === 'off').length;
 
+  // ── Squelettes pendant le chargement ────────────────────────
+  if (loading) {
+    return (
+      <div className="space-y-5">
+        <StatsSkeleton />
+        <CalendarSkeleton />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
-      {/* Aucun créneau publié sur la plage chargée : soit vide, soit encore en préparation côté équipe */}
-      {!loading && entries.length === 0 && employeeId && (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+      {/* Message si aucun créneau */}
+      {entries.length === 0 && employeeId && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 animate-stagger-1">
           <p className="font-medium text-slate-800">Aucun planning affiché pour cette période</p>
           <p className="mt-1 text-xs text-slate-500 leading-relaxed">
             Soit vous n&apos;avez pas encore de créneaux prévus, soit votre responsable n&apos;a pas encore
-            &quot;envoyé&quot; le planning (mois ou semaine) depuis l&apos;interface admin. Revenez plus tard ou
+            &quot;envoyé&quot; le planning depuis l&apos;interface admin. Revenez plus tard ou
             contactez votre équipe si besoin.
           </p>
         </div>
       )}
 
-      {/* Prochain shift */}
+      {/* Prochain shift — stagger 1 */}
       {nextEntry && (
         <div
-          className="rounded-2xl p-4 border flex items-start gap-3"
+          className="rounded-2xl p-4 border flex items-start gap-3 animate-stagger-1"
           style={{ backgroundColor: nextEntry.shift.color, borderColor: nextEntry.shift.color }}
         >
           <div
@@ -199,8 +298,8 @@ export default function EmployeeSchedulePage() {
         </div>
       )}
 
-      {/* Statistiques (période = semaine ou mois selon le toggle) */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Statistiques — stagger 2 */}
+      <div className="grid grid-cols-3 gap-3 animate-stagger-2">
         <div className="bg-white rounded-2xl border border-slate-100 p-4">
           <div className="flex items-center gap-1.5 text-slate-400 mb-1">
             <Clock className="w-3.5 h-3.5" />
@@ -227,16 +326,15 @@ export default function EmployeeSchedulePage() {
         </div>
       </div>
 
-      {/* Calendrier */}
-      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+      {/* Calendrier — stagger 3 */}
+      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden animate-stagger-3">
         <div className="px-4 sm:px-5 py-4 border-b border-slate-100 space-y-3">
+          {/* Navigation mois/semaine */}
           <div className="flex items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() =>
-                setCurrentDate((d) => (viewMode === 'week' ? addWeeks(d, -1) : addMonths(d, -1)))
-              }
-              className="h-8 w-8 shrink-0 flex items-center justify-center rounded-xl hover:bg-slate-100 transition-colors"
+              onClick={handlePrev}
+              className="h-8 w-8 shrink-0 flex items-center justify-center rounded-xl hover:bg-slate-100 transition-colors active:scale-95"
               aria-label={viewMode === 'week' ? 'Semaine précédente' : 'Mois précédent'}
             >
               <ChevronLeft className="w-4 h-4 text-slate-500" />
@@ -259,10 +357,8 @@ export default function EmployeeSchedulePage() {
             </h2>
             <button
               type="button"
-              onClick={() =>
-                setCurrentDate((d) => (viewMode === 'week' ? addWeeks(d, 1) : addMonths(d, 1)))
-              }
-              className="h-8 w-8 shrink-0 flex items-center justify-center rounded-xl hover:bg-slate-100 transition-colors"
+              onClick={handleNext}
+              className="h-8 w-8 shrink-0 flex items-center justify-center rounded-xl hover:bg-slate-100 transition-colors active:scale-95"
               aria-label={viewMode === 'week' ? 'Semaine suivante' : 'Mois suivant'}
             >
               <ChevronRight className="w-4 h-4 text-slate-500" />
@@ -311,12 +407,13 @@ export default function EmployeeSchedulePage() {
           ))}
         </div>
 
-        {loading ? (
-          <div className="h-64 flex items-center justify-center">
-            <p className="text-sm text-slate-400">Chargement…</p>
-          </div>
-        ) : viewMode === 'month' ? (
-          <div className="grid grid-cols-7">
+        {/* Grille calendrier — calendarKey change quand les données arrivent → animation */}
+        {viewMode === 'month' ? (
+          <div
+            key={calendarKey}
+            className={`grid grid-cols-7 ${animClass}`}
+            style={{ opacity: isFetching ? 0.45 : 1, transition: 'opacity 0.15s ease' }}
+          >
             {Array.from({ length: startPad }).map((_, i) => (
               <div key={`pad-${i}`} className="h-20 border-b border-r border-slate-50/80" />
             ))}
@@ -374,7 +471,11 @@ export default function EmployeeSchedulePage() {
             })}
           </div>
         ) : (
-          <div className="grid grid-cols-7">
+          <div
+            key={calendarKey}
+            className={`grid grid-cols-7 ${animClass}`}
+            style={{ opacity: isFetching ? 0.45 : 1, transition: 'opacity 0.15s ease' }}
+          >
             {weekDays.map((day) => {
               const dateStr = format(day, 'yyyy-MM-dd');
               const entry = entryMap.get(dateStr);

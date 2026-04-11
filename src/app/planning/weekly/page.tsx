@@ -594,8 +594,8 @@ export default function WeeklyPlanningPage() {
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-20 bg-white shadow-sm">
               <tr className="border-b border-slate-200">
-                {/* Colonne employés */}
-                <th className="w-10 sm:w-52 border-r border-slate-100 px-2 sm:px-4 py-4 text-left bg-slate-50/50">
+                {/* Colonne employés — sticky pour rester visible au défilement horizontal */}
+                <th className="sticky left-0 z-30 w-10 sm:w-52 min-w-[2.5rem] sm:min-w-[13rem] border-r border-slate-100 px-2 sm:px-4 py-4 text-left bg-slate-50/50 shadow-[2px_0_4px_rgba(0,0,0,0.04)]">
                   <span className="hidden sm:inline text-xs font-semibold text-slate-400 uppercase tracking-wide">
                     Employé
                   </span>
@@ -666,11 +666,14 @@ export default function WeeklyPlanningPage() {
                   return (
                     <tr key={`sep-${row.groupName}-${rowIdx}`}>
                       <td
-                        colSpan={9}
-                        className="px-4 py-1.5 bg-slate-100/80 border-b border-t border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-widest"
+                        className="sticky left-0 z-20 w-10 sm:w-52 min-w-[2.5rem] sm:min-w-[13rem] border-r border-slate-200 px-2 sm:px-4 py-1.5 bg-slate-100/95 shadow-[2px_0_4px_rgba(0,0,0,0.04)] text-[10px] font-bold text-slate-500 uppercase tracking-widest"
                       >
                         {row.groupName}
                       </td>
+                      <td
+                        colSpan={8}
+                        className="bg-slate-100/80 border-b border-t border-slate-200"
+                      />
                     </tr>
                   );
                 }
@@ -685,8 +688,12 @@ export default function WeeklyPlanningPage() {
                     key={`${employee.id}-${rowIdx}`}
                     className={`group ${empIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/20'} hover:bg-indigo-50/10 transition-colors`}
                   >
-                    {/* Infos employé */}
-                    <td className="border-r border-slate-100 px-2 sm:px-4 py-2 sm:py-3">
+                    {/* Infos employé — sticky comme l'en-tête */}
+                    <td
+                      className={`sticky left-0 z-10 border-r border-slate-200 px-2 sm:px-4 py-2 sm:py-3 shadow-[2px_0_4px_rgba(0,0,0,0.04)] ${
+                        empIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/20'
+                      }`}
+                    >
                       <div className="flex items-center gap-3">
                         <div
                           className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center text-xs font-bold text-white shadow-sm shrink-0 relative"
