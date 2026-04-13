@@ -16,7 +16,7 @@ import {
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { ChevronLeft, ChevronRight, Clock, Sun, Info } from 'lucide-react';
-import { getNextUpcomingWorkEntry, calculateShiftDuration } from '@/lib/utils';
+import { getNextUpcomingWorkEntry, calculateShiftDuration, formatHours } from '@/lib/utils';
 
 interface Shift {
   id: string;
@@ -313,7 +313,7 @@ export default function EmployeeSchedulePage() {
             <Clock className="w-3.5 h-3.5" />
             <span className="text-[11px] font-semibold uppercase tracking-wide">Heures</span>
           </div>
-          <p className="text-2xl font-bold text-slate-800">{totalHours}h</p>
+          <p className="text-2xl font-bold text-slate-800">{formatHours(totalHours)}</p>
           <p className="text-xs text-slate-400 mt-0.5">{statsPeriodLabel}</p>
         </div>
         <div className="bg-white rounded-2xl border border-slate-100 p-4">

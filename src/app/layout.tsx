@@ -21,9 +21,12 @@ export const metadata: Metadata = {
     telephone: false,
   },
   icons: {
-    // Même fichier que l’icône PWA : l’iPhone utilise rel="apple-touch-icon" sur cette URL
-    apple: '/icon-512.png',
-    icon: '/icon-512.png',
+    // apple-touch-icon.png = 180×180, généré pour iOS (écran d’accueil)
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+    icon: [
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
     shortcut: '/icon-512.png',
   },
 };
@@ -41,7 +44,9 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="Bretzel Planning" />
+        <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
         <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
         <link rel="shortcut icon" href="/icon-512.png" />
       </head>
       <body className="font-sans antialiased bg-slate-50 text-slate-900">

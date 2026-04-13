@@ -7,7 +7,7 @@ import { fr } from 'date-fns/locale';
 import {
   Clock, CheckCircle2, XCircle,
   ChevronDown, ChevronUp, AlertCircle, RefreshCw,
-  Coffee, UtensilsCrossed, AlertTriangle, ListChecks,
+  Coffee, UtensilsCrossed, AlertTriangle, ListChecks, Users,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Header } from '@/components/layout/Header';
@@ -239,10 +239,30 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
                 Départ {minutesToLabel(endDiff)}
               </span>
             )}
-            {!pauseOk && (
-              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-lg border bg-amber-50 text-amber-800 border-amber-300 flex items-center gap-0.5">
+          </div>
+          {/* Coches / déclarations journée (visible sans ouvrir le panneau) */}
+          <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+            {pauseOk ? (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md">
+                <CheckCircle2 className="w-3 h-3 shrink-0" />
+                Pause 15 min
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md">
                 <AlertTriangle className="w-3 h-3 shrink-0" />
                 Pas de pause 15 min
+              </span>
+            )}
+            {(decl.had_snack ?? false) && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-slate-700 bg-white border border-slate-200 px-1.5 py-0.5 rounded-md">
+                <Coffee className="w-3 h-3 shrink-0 text-amber-700" />
+                Collation
+              </span>
+            )}
+            {(decl.ate_work_food ?? false) && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-slate-700 bg-white border border-slate-200 px-1.5 py-0.5 rounded-md">
+                <UtensilsCrossed className="w-3 h-3 shrink-0 text-slate-600" />
+                Repas travail
               </span>
             )}
           </div>
@@ -411,6 +431,9 @@ export default function AdminTimesheetsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [bulkApproving, setBulkApproving] = useState(false);
+  /** null = tous les employés, sinon l'id de l'employé sélectionné */
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const [empDropdownOpen, setEmpDropdownOpen] = useState(false);
 
   const fetchAll = async (silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true);
@@ -470,13 +493,40 @@ export default function AdminTimesheetsPage() {
     await fetchAll(true);
   };
 
-  const filtered = useMemo(() => declarations.filter((d) => d.status === tab), [declarations, tab]);
+  // Liste unique des employés (pour le sélecteur), triée par nom
+  const employeeOptions = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; color: string }>();
+    for (const d of declarations) {
+      if (!map.has(d.employee_id) && d.employees) {
+        map.set(d.employee_id, {
+          id: d.employee_id,
+          name: `${d.employees.first_name}${d.employees.last_name ? ' ' + d.employees.last_name : ''}`,
+          color: d.employees.color ?? '#6366f1',
+        });
+      }
+    }
+    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  }, [declarations]);
+
+  const selectedEmployee = selectedEmployeeId
+    ? employeeOptions.find((e) => e.id === selectedEmployeeId) ?? null
+    : null;
+
+  // Déclarations filtrées par onglet + employé sélectionné
+  const byEmployee = useMemo(
+    () => selectedEmployeeId
+      ? declarations.filter((d) => d.employee_id === selectedEmployeeId)
+      : declarations,
+    [declarations, selectedEmployeeId]
+  );
+
+  const filtered = useMemo(() => byEmployee.filter((d) => d.status === tab), [byEmployee, tab]);
 
   const counts = useMemo(() => ({
-    pending:  declarations.filter((d) => d.status === 'pending').length,
-    approved: declarations.filter((d) => d.status === 'approved').length,
-    rejected: declarations.filter((d) => d.status === 'rejected').length,
-  }), [declarations]);
+    pending:  byEmployee.filter((d) => d.status === 'pending').length,
+    approved: byEmployee.filter((d) => d.status === 'approved').length,
+    rejected: byEmployee.filter((d) => d.status === 'rejected').length,
+  }), [byEmployee]);
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
@@ -551,6 +601,76 @@ export default function AdminTimesheetsPage() {
             </button>
           </div>
         </div>
+
+        {/* ── Filtre par employé ────────────────────────────── */}
+        {employeeOptions.length > 1 && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setEmpDropdownOpen((v) => !v)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white shadow-sm text-sm font-medium text-slate-700 hover:border-indigo-300 hover:bg-slate-50 transition-colors w-full sm:w-auto"
+            >
+              {selectedEmployee ? (
+                <>
+                  <div
+                    className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0"
+                    style={{ backgroundColor: selectedEmployee.color }}
+                  >
+                    {initials(selectedEmployee.name.split(' ')[0], selectedEmployee.name.split(' ').slice(1).join(' ') || null)}
+                  </div>
+                  <span>{selectedEmployee.name}</span>
+                </>
+              ) : (
+                <>
+                  <Users className="w-4 h-4 text-slate-400" />
+                  <span>Tous les employés</span>
+                </>
+              )}
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 ml-auto transition-transform ${empDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {empDropdownOpen && (
+              <>
+                {/* Fond transparent pour fermer */}
+                <div className="fixed inset-0 z-40" onClick={() => setEmpDropdownOpen(false)} />
+                <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 w-64 max-h-72 overflow-y-auto animate-fade-in">
+                  {/* Option "Tous" */}
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedEmployeeId(null); setEmpDropdownOpen(false); }}
+                    className={`w-full text-left px-4 py-2.5 flex items-center gap-2.5 text-sm transition-colors ${
+                      !selectedEmployeeId ? 'bg-indigo-50 text-indigo-700 font-semibold' : 'text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Users className="w-5 h-5 text-slate-400 shrink-0" />
+                    <span>Tous les employés</span>
+                    {!selectedEmployeeId && <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500 ml-auto" />}
+                  </button>
+                  <div className="border-t border-slate-100 my-1" />
+                  {employeeOptions.map((emp) => (
+                    <button
+                      key={emp.id}
+                      type="button"
+                      onClick={() => { setSelectedEmployeeId(emp.id); setEmpDropdownOpen(false); }}
+                      className={`w-full text-left px-4 py-2.5 flex items-center gap-2.5 text-sm transition-colors ${
+                        selectedEmployeeId === emp.id ? 'bg-indigo-50 text-indigo-700 font-semibold' : 'text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div
+                        className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0"
+                        style={{ backgroundColor: emp.color }}
+                      >
+                        {initials(emp.name.split(' ')[0], emp.name.split(' ').slice(1).join(' ') || null)}
+                      </div>
+                      <span className="truncate">{emp.name}</span>
+                      {selectedEmployeeId === emp.id && <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500 ml-auto shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* ── Contenu ──────────────────────────────────────── */}
         {loading ? (

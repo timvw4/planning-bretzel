@@ -505,7 +505,7 @@ export default function EmployeeAvailabilityPage() {
       <p className="text-xs text-slate-400 text-center pb-2">
         {isLocked
           ? 'Ce mois est verrouillé. Demandez une modification à votre responsable.'
-          : 'Les jours passés ne peuvent pas être modifiés.'}
+          : 'à valider avant le début du mois.'}
       </p>
 
       {/* ── Modal confirmation validation ────────────────────── */}
