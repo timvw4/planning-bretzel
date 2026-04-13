@@ -21,7 +21,8 @@ export const metadata: Metadata = {
     telephone: false,
   },
   icons: {
-    apple: '/apple-touch-icon.png',
+    // Même fichier que l’icône PWA : l’iPhone utilise rel="apple-touch-icon" sur cette URL
+    apple: '/icon-512.png',
     icon: '/icon-512.png',
     shortcut: '/icon-512.png',
   },
