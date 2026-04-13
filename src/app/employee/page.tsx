@@ -16,7 +16,7 @@ import {
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { ChevronLeft, ChevronRight, Clock, Sun, Info } from 'lucide-react';
-import { getNextUpcomingWorkEntry } from '@/lib/utils';
+import { getNextUpcomingWorkEntry, calculateShiftDuration } from '@/lib/utils';
 
 interface Shift {
   id: string;
@@ -141,7 +141,7 @@ export default function EmployeeSchedulePage() {
 
     const { data } = await supabase
       .from('schedule_entries')
-      .select(`date, shifts (id, name, short_name, type, start_time, end_time, color, text_color, duration_hours)`)
+      .select(`date, validated_start, validated_end, shifts (id, name, short_name, type, start_time, end_time, color, text_color, duration_hours)`)
       .eq('employee_id', employeeId)
       .eq('visible_to_employee', true)
       .gte('date', start)
@@ -150,20 +150,28 @@ export default function EmployeeSchedulePage() {
 
     if (data) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      setEntries(data.map((row: any) => ({
-        date: row.date,
-        shift: {
-          id: row.shifts.id,
-          name: row.shifts.name,
-          shortName: row.shifts.short_name,
-          type: row.shifts.type,
-          startTime: row.shifts.start_time ?? '',
-          endTime: row.shifts.end_time ?? '',
-          color: row.shifts.color,
-          textColor: row.shifts.text_color,
-          durationHours: row.shifts.duration_hours ?? 0,
-        },
-      })));
+      setEntries(data.map((row: any) => {
+        const startT = row.validated_start ?? row.shifts.start_time ?? '';
+        const endT = row.validated_end ?? row.shifts.end_time ?? '';
+        const durationHours =
+          row.validated_start && row.validated_end
+            ? calculateShiftDuration(row.validated_start, row.validated_end)
+            : (row.shifts.duration_hours ?? 0);
+        return {
+          date: row.date,
+          shift: {
+            id: row.shifts.id,
+            name: row.shifts.name,
+            shortName: row.shifts.short_name,
+            type: row.shifts.type,
+            startTime: startT,
+            endTime: endT,
+            color: row.shifts.color,
+            textColor: row.shifts.text_color,
+            durationHours,
+          },
+        };
+      }));
     }
 
     // Détermine la classe d'animation selon la direction capturée au clic

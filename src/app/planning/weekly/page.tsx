@@ -44,7 +44,7 @@ import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
-import { formatDate, formatHours, getInitials, calcPickerPosition } from '@/lib/utils';
+import { formatDate, formatHours, getInitials, calcPickerPosition, getEntryDisplayTimeRange, calculateShiftDuration, getEntryDurationHours } from '@/lib/utils';
 import { Employee, PlanningAlert } from '@/lib/types';
 import {
   DropdownMenu,
@@ -779,9 +779,11 @@ export default function WeeklyPlanningPage() {
                                   {shift.shortName}
                                 </span>
                                 <span className="hidden sm:block text-[10px] font-medium leading-tight opacity-95 text-center">
-                                  {shift.durationHours > 0
-                                    ? `${shift.startTime}–${shift.endTime}`
-                                    : shift.name}
+                                  {(() => {
+                                    const disp = getEntryDisplayTimeRange(entry ?? undefined, shift);
+                                    const dur = calculateShiftDuration(disp.start, disp.end);
+                                    return dur > 0 ? `${disp.start}–${disp.end}` : shift.name;
+                                  })()}
                                 </span>
                               </div>
                             ) : (
@@ -839,7 +841,7 @@ export default function WeeklyPlanningPage() {
                       (e) => e.employeeId === emp.id && e.date === dateStr
                     );
                     const shift = entry ? shiftMap.get(entry.shiftId) : null;
-                    return sum + (shift?.durationHours ?? 0);
+                    return sum + (entry && shift ? getEntryDurationHours(entry, shift) : 0);
                   }, 0);
                   return (
                     <td

@@ -58,6 +58,29 @@ export function calculateShiftDuration(startTime: string, endTime: string): numb
   return differenceInMinutes(end, start) / 60;
 }
 
+/**
+ * Plage horaire affichée pour une case planning : heures validées si présentes, sinon le modèle de shift.
+ */
+export function getEntryDisplayTimeRange(
+  entry: ScheduleEntry | undefined,
+  shift: Shift | undefined
+): { start: string; end: string } {
+  if (!shift) return { start: '', end: '' };
+  const vs = entry?.validatedStart;
+  const ve = entry?.validatedEnd;
+  if (vs && ve) return { start: vs, end: ve };
+  return { start: shift.startTime, end: shift.endTime };
+}
+
+/** Durée (heures) pour une entrée : validée si renseignée, sinon durée du shift. */
+export function getEntryDurationHours(entry: ScheduleEntry, shift: Shift | undefined): number {
+  if (!shift) return 0;
+  if (entry.validatedStart && entry.validatedEnd) {
+    return calculateShiftDuration(entry.validatedStart, entry.validatedEnd);
+  }
+  return shift.durationHours ?? 0;
+}
+
 /** Début du shift sur le jour `dateStr` (heure locale). */
 export function getShiftStartDateTime(dateStr: string, startTime: string): Date {
   const day = parse(dateStr, 'yyyy-MM-dd', new Date());
@@ -125,7 +148,7 @@ export function getEmployeeHoursForPeriod(
     )
     .reduce((total, entry) => {
       const shift = shiftMap.get(entry.shiftId);
-      return total + (shift?.durationHours ?? 0);
+      return total + getEntryDurationHours(entry, shift);
     }, 0);
 }
 
@@ -155,10 +178,10 @@ export function detectAlerts(
     const employee = empMap.get(empId);
     if (!employee) return;
 
-    // Calcul heures semaine
+    // Calcul heures semaine (utilise les heures validées si présentes)
     const weeklyHours = empEntries.reduce((sum, e) => {
       const shift = shiftMap.get(e.shiftId);
-      return sum + (shift?.durationHours ?? 0);
+      return sum + getEntryDurationHours(e, shift);
     }, 0);
 
     if (weeklyHours > 48) {

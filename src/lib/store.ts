@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import { Employee, Shift, ScheduleEntry, AppSettings, PlanningAlert, EmployeeGroup } from './types';
 import { defaultSettings } from '@/data/mock';
-import { buildPlanningAlerts, getAvailabilityFetchRange } from './utils';
+import { buildPlanningAlerts, getAvailabilityFetchRange, getEntryDurationHours } from './utils';
 import { db } from '@/lib/supabase/db';
 import { format, startOfWeek, endOfWeek } from 'date-fns';
 
@@ -262,12 +262,16 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     );
 
     if (existingEntry) {
+      const shiftChanged = existingEntry.shiftId !== shiftId;
       const updated: ScheduleEntry = {
         ...existingEntry,
         shiftId,
         note,
         isModified: true,
         visibleToEmployee: existingEntry.visibleToEmployee,
+        // Nouveau type de shift : les heures validées ne correspondent plus au modèle
+        validatedStart: shiftChanged ? null : existingEntry.validatedStart,
+        validatedEnd: shiftChanged ? null : existingEntry.validatedEnd,
       };
       set((state) => ({
         scheduleEntries: state.scheduleEntries.map((e) =>
@@ -332,6 +336,8 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         date: newDate,
         isModified: false,
         visibleToEmployee: false,
+        validatedStart: null,
+        validatedEnd: null,
       };
     });
 
@@ -468,7 +474,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       )
       .reduce((total, entry) => {
         const shift = shiftMap.get(entry.shiftId);
-        return total + (shift?.durationHours ?? 0);
+        return total + getEntryDurationHours(entry, shift);
       }, 0);
   },
 
@@ -484,7 +490,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       )
       .reduce((total, entry) => {
         const shift = shiftMap.get(entry.shiftId);
-        return total + (shift?.durationHours ?? 0);
+        return total + getEntryDurationHours(entry, shift);
       }, 0);
   },
 }));

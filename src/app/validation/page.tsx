@@ -25,7 +25,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { usePlanningStore } from '@/lib/store';
-import { formatHours } from '@/lib/utils';
+import { formatHours, getEntryDurationHours } from '@/lib/utils';
 
 const MONTHS_TO_SHOW = 12;
 
@@ -58,9 +58,10 @@ export default function ValidationPage() {
       const end = format(endOfMonth(date), 'yyyy-MM-dd');
       const days = eachDayOfInterval({ start: new Date(start), end: new Date(end) });
       const entries = scheduleEntries.filter((e) => e.date >= start && e.date <= end);
+      const shiftMap = new Map(shifts.map((s) => [s.id, s]));
       const totalHours = entries.reduce((sum, entry) => {
-        const shift = shifts.find((s) => s.id === entry.shiftId);
-        return sum + (shift?.durationHours ?? 0);
+        const shift = shiftMap.get(entry.shiftId);
+        return sum + getEntryDurationHours(entry, shift);
       }, 0);
       const activeEmployees = new Set(entries.map((e) => e.employeeId)).size;
       const isLocked = lockedMonths.includes(key);
@@ -86,7 +87,7 @@ export default function ValidationPage() {
       const empEntries = month.entries.filter((e) => e.employeeId === emp.id);
       const totalHours = empEntries.reduce((sum, entry) => {
         const shift = shiftMap.get(entry.shiftId);
-        return sum + (shift?.durationHours ?? 0);
+        return sum + getEntryDurationHours(entry, shift);
       }, 0);
       const shiftCounts: Record<string, number> = {};
       empEntries.forEach((entry) => {
@@ -248,7 +249,7 @@ export default function ValidationPage() {
                     <p className="text-2xl font-bold text-slate-900">
                       {formatHours(selectedMonthData.month.totalHours)}
                     </p>
-                    <p className="text-xs text-slate-400 mt-0.5">Heures planifiées</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Heures (prévu ou validé)</p>
                   </div>
                   <div className="text-center">
                     <p className="text-2xl font-bold text-slate-900">

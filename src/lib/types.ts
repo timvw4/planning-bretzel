@@ -48,6 +48,9 @@ export interface ScheduleEntry {
   isModified?: boolean;    // Marqué si modifié après publication
   /** false = brouillon admin ; l'employé ne voit le créneau qu'après publication du mois/semaine */
   visibleToEmployee: boolean;
+  /** Heures réelles validées (après approbation admin des déclarations) — remplacent l’affichage prévu du shift */
+  validatedStart?: string | null;
+  validatedEnd?: string | null;
 }
 
 export type AlertSeverity = 'error' | 'warning' | 'info';

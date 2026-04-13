@@ -55,7 +55,7 @@ import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPubl
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
 import { Employee } from '@/lib/types';
-import { formatDate, formatHours, getInitials, calcPickerPosition } from '@/lib/utils';
+import { formatDate, formatHours, getInitials, calcPickerPosition, getEntryDisplayTimeRange, calculateShiftDuration } from '@/lib/utils';
 
 // ── Niveaux de zoom ──────────────────────────────────────────
 // Chaque niveau définit la largeur minimale des cellules-jours
@@ -977,6 +977,9 @@ export default function MonthlyPlanningPage() {
                         (e) => e.employeeId === employee.id && e.date === dateStr
                       );
                       const shift          = entry ? shiftMap.get(entry.shiftId) : null;
+                      const displayTimes   = shift ? getEntryDisplayTimeRange(entry ?? undefined, shift) : { start: '', end: '' };
+                      const showValidatedTime =
+                        Boolean(shift && zoom.showTime && calculateShiftDuration(displayTimes.start, displayTimes.end) > 0);
                       const dow            = getDay(day);
                       const isWE           = dow === 0 || dow === 6;
                       const isTd           = isToday(day);
@@ -1040,13 +1043,13 @@ export default function MonthlyPlanningPage() {
                                   {shift.shortName}
                                 </span>
 
-                                {/* Heure de début–fin (si zoom lg/xl) */}
-                                {zoom.showTime && shift.durationHours > 0 && (
+                                {/* Heure de début–fin (si zoom lg/xl) — horaires validés si présents */}
+                                {showValidatedTime && (
                                   <span
                                     className="leading-none mt-0.5 opacity-80"
                                     style={{ color: shift.textColor, fontSize: '9px' }}
                                   >
-                                    {shift.startTime}–{shift.endTime}
+                                    {displayTimes.start}–{displayTimes.end}
                                   </span>
                                 )}
                               </>

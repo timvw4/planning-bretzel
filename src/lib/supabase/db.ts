@@ -93,6 +93,8 @@ function dbToEntry(row: any): ScheduleEntry {
     isModified: row.is_modified ?? false,
     // Sans colonne (anciennes bases) : comportement historique = visible
     visibleToEmployee: row.visible_to_employee ?? true,
+    validatedStart: row.validated_start ?? null,
+    validatedEnd: row.validated_end ?? null,
   };
 }
 
@@ -181,7 +183,7 @@ export const db = {
   async getScheduleEntries(): Promise<ScheduleEntry[]> {
     const supabase = createClient();
     const { data, error } = await supabase.from('schedule_entries').select(
-      'id, employee_id, shift_id, date, note, is_modified, visible_to_employee'
+      'id, employee_id, shift_id, date, note, is_modified, visible_to_employee, validated_start, validated_end'
     );
     if (error) throw error;
     return (data ?? []).map(dbToEntry);
@@ -200,6 +202,8 @@ export const db = {
           note: entry.note ?? '',
           is_modified: entry.isModified ?? false,
           visible_to_employee: entry.visibleToEmployee,
+          validated_start: entry.validatedStart ?? null,
+          validated_end: entry.validatedEnd ?? null,
         },
         { onConflict: 'employee_id,date' }
       );
@@ -238,6 +242,8 @@ export const db = {
           note: e.note ?? '',
           is_modified: e.isModified ?? false,
           visible_to_employee: e.visibleToEmployee,
+          validated_start: e.validatedStart ?? null,
+          validated_end: e.validatedEnd ?? null,
         })),
         { onConflict: 'employee_id,date' }
       );

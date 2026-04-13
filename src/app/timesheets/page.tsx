@@ -5,11 +5,61 @@ import { createClient } from '@/lib/supabase/client';
 import { format, parseISO, differenceInMinutes } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import {
-  Clock, CheckCircle2, XCircle, ClipboardList,
+  Clock, CheckCircle2, XCircle,
   ChevronDown, ChevronUp, AlertCircle, RefreshCw,
+  Coffee, UtensilsCrossed, AlertTriangle, ListChecks,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Header } from '@/components/layout/Header';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { usePlanningStore } from '@/lib/store';
+
+// ── Sync planning : heures validées → cases du planning (schedule_entries) ──
+
+/** Après approbation admin : enregistre les heures réelles sur la ligne planning du jour. */
+async function syncScheduleFromApprovedDeclaration(
+  supabase: ReturnType<typeof createClient>,
+  employeeId: string,
+  date: string,
+  actualStart: string,
+  actualEnd: string
+) {
+  const { error } = await supabase
+    .from('schedule_entries')
+    .update({
+      validated_start: actualStart,
+      validated_end: actualEnd,
+      is_modified: true,
+    })
+    .eq('employee_id', employeeId)
+    .eq('date', date);
+  if (error) console.error('syncScheduleFromApprovedDeclaration', error);
+}
+
+/** Après refus : retire les heures validées du planning pour ce jour (retour au modèle de shift). */
+async function clearScheduleValidatedTimes(
+  supabase: ReturnType<typeof createClient>,
+  employeeId: string,
+  date: string
+) {
+  const { error } = await supabase
+    .from('schedule_entries')
+    .update({
+      validated_start: null,
+      validated_end: null,
+    })
+    .eq('employee_id', employeeId)
+    .eq('date', date);
+  if (error) console.error('clearScheduleValidatedTimes', error);
+}
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -27,6 +77,9 @@ interface Declaration {
   status: DeclStatus;
   admin_note: string | null;
   declared_at: string;
+  pause_15min?: boolean;
+  had_snack?: boolean;
+  ate_work_food?: boolean;
   // jointure avec employees
   employees: { first_name: string; last_name: string | null; color: string | null } | null;
 }
@@ -95,6 +148,8 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
     ? timeToMinutes(decl.planned_end) - timeToMinutes(decl.planned_start)
     : null;
 
+  const pauseOk = decl.pause_15min ?? true;
+
   const handleApprove = async () => {
     setActing(true);
     const supabase = createClient();
@@ -103,7 +158,15 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
       .update({ status: 'approved', admin_note: null, reviewed_at: new Date().toISOString() })
       .eq('id', decl.id);
     if (error) { toast.error('Erreur lors de l\'approbation'); setActing(false); return; }
-    toast.success('Déclaration approuvée');
+    await syncScheduleFromApprovedDeclaration(
+      supabase,
+      decl.employee_id,
+      decl.date,
+      decl.actual_start,
+      decl.actual_end
+    );
+    void usePlanningStore.getState().loadData();
+    toast.success('Déclaration approuvée — planning mis à jour');
     onStatusChange(decl.id, 'approved');
     setActing(false);
   };
@@ -117,6 +180,8 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
       .update({ status: 'rejected', admin_note: rejectNote.trim(), reviewed_at: new Date().toISOString() })
       .eq('id', decl.id);
     if (error) { toast.error('Erreur lors du refus'); setActing(false); return; }
+    await clearScheduleValidatedTimes(supabase, decl.employee_id, decl.date);
+    void usePlanningStore.getState().loadData();
     toast.success('Déclaration refusée');
     onStatusChange(decl.id, 'rejected', rejectNote.trim());
     setShowRejectForm(false);
@@ -174,6 +239,12 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
                 Départ {minutesToLabel(endDiff)}
               </span>
             )}
+            {!pauseOk && (
+              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-lg border bg-amber-50 text-amber-800 border-amber-300 flex items-center gap-0.5">
+                <AlertTriangle className="w-3 h-3 shrink-0" />
+                Pas de pause 15 min
+              </span>
+            )}
           </div>
         </div>
 
@@ -217,6 +288,39 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
               <p className="text-xs text-indigo-400 mt-0.5">
                 {Math.floor(actualDuration / 60)}h{(actualDuration % 60).toString().padStart(2, '0')}
               </p>
+            </div>
+          </div>
+
+          {/* Pause, collation, repas */}
+          {!pauseOk && (
+            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-900">
+                <strong>Attention :</strong> l’employé indique <strong>ne pas avoir pris</strong> une pause d’au moins 15 minutes dans la journée.
+              </p>
+            </div>
+          )}
+          <div className="bg-white border border-slate-200 rounded-xl px-3 py-3 space-y-2">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Déclarations journée</p>
+            <div className="grid gap-1.5 text-sm">
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-500">Pause ≥ 15 min</span>
+                <span className={`font-semibold ${pauseOk ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {pauseOk ? 'Oui' : 'Non'}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-500 flex items-center gap-1.5">
+                  <Coffee className="w-3.5 h-3.5 text-slate-400" /> Collation
+                </span>
+                <span className="font-semibold text-slate-800">{(decl.had_snack ?? false) ? 'Oui' : 'Non'}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-500 flex items-center gap-1.5">
+                  <UtensilsCrossed className="w-3.5 h-3.5 text-slate-400" /> Nourriture du travail
+                </span>
+                <span className="font-semibold text-slate-800">{(decl.ate_work_food ?? false) ? 'Oui' : 'Non'}</span>
+              </div>
             </div>
           </div>
 
@@ -305,6 +409,8 @@ export default function AdminTimesheetsPage() {
   const [declarations, setDeclarations] = useState<Declaration[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
+  const [bulkApproving, setBulkApproving] = useState(false);
 
   const fetchAll = async (silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true);
@@ -326,6 +432,44 @@ export default function AdminTimesheetsPage() {
     );
   };
 
+  /** Approuve toutes les déclarations encore en attente (une seule requête). */
+  const handleApproveAllPending = async () => {
+    setBulkApproving(true);
+    const supabase = createClient();
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('time_declarations')
+      .update({ status: 'approved', admin_note: null, reviewed_at: now })
+      .eq('status', 'pending')
+      .select('employee_id, date, actual_start, actual_end');
+    if (error) {
+      toast.error('Erreur lors de l\'approbation groupée');
+      setBulkApproving(false);
+      return;
+    }
+    const n = data?.length ?? 0;
+    if (data && n > 0) {
+      for (const row of data) {
+        await syncScheduleFromApprovedDeclaration(
+          supabase,
+          row.employee_id as string,
+          row.date as string,
+          row.actual_start as string,
+          row.actual_end as string
+        );
+      }
+      void usePlanningStore.getState().loadData();
+    }
+    if (n === 0) {
+      toast('Aucune déclaration en attente');
+    } else {
+      toast.success(`${n} déclaration${n > 1 ? 's' : ''} approuvée${n > 1 ? 's' : ''} — planning mis à jour`);
+    }
+    setBulkDialogOpen(false);
+    setBulkApproving(false);
+    await fetchAll(true);
+  };
+
   const filtered = useMemo(() => declarations.filter((d) => d.status === tab), [declarations, tab]);
 
   const counts = useMemo(() => ({
@@ -344,7 +488,7 @@ export default function AdminTimesheetsPage() {
       <div className="flex-1 max-w-4xl mx-auto w-full p-6 space-y-5">
 
         {/* ── Onglets ──────────────────────────────────────── */}
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-1.5 bg-white border border-slate-100 rounded-2xl p-1.5 shadow-sm">
             {STATUS_TABS.map(({ key, label }) => {
               if (key === 'all') return null;
@@ -379,14 +523,33 @@ export default function AdminTimesheetsPage() {
             })}
           </div>
 
-          <button
-            onClick={() => fetchAll(true)}
-            disabled={refreshing}
-            className="h-9 w-9 flex items-center justify-center rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-400 transition-colors disabled:opacity-50"
-            title="Rafraîchir"
-          >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {counts.pending > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setBulkDialogOpen(true)}
+                disabled={refreshing || bulkApproving}
+                className="gap-1.5 border-emerald-200 text-emerald-800 hover:bg-emerald-50 hover:text-emerald-900"
+              >
+                <ListChecks className="h-4 w-4" />
+                Tout approuver
+                <span className="rounded-full bg-emerald-100 px-1.5 text-[10px] font-bold text-emerald-800">
+                  {counts.pending}
+                </span>
+              </Button>
+            )}
+            <button
+              type="button"
+              onClick={() => fetchAll(true)}
+              disabled={refreshing}
+              className="h-9 w-9 flex items-center justify-center rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-400 transition-colors disabled:opacity-50"
+              title="Rafraîchir"
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
 
         {/* ── Contenu ──────────────────────────────────────── */}
@@ -440,6 +603,40 @@ export default function AdminTimesheetsPage() {
           </div>
         )}
       </div>
+
+      <Dialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ListChecks className="h-5 w-5 text-emerald-600" />
+              Approuver toutes les déclarations en attente ?
+            </DialogTitle>
+            <DialogDescription className="text-left leading-relaxed pt-1">
+              Les <strong>{counts.pending}</strong> feuille{counts.pending > 1 ? 's' : ''} d&apos;heures encore au statut
+              « En attente » seront marquées comme <strong>approuvées</strong>. Cette action ne peut pas être annulée
+              automatiquement ; vous pourrez consulter l&apos;onglet « Approuvées ».
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setBulkDialogOpen(false)}
+              disabled={bulkApproving}
+            >
+              Annuler
+            </Button>
+            <Button
+              type="button"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              onClick={() => void handleApproveAllPending()}
+              disabled={bulkApproving}
+            >
+              {bulkApproving ? 'Approbation…' : `Confirmer (${counts.pending})`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,17 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
   format, startOfWeek, endOfWeek, eachDayOfInterval,
-  addWeeks, isToday, getDay, parseISO, isFuture,
+  addWeeks, isToday, getDay, parseISO,
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import {
   ChevronLeft, ChevronRight, Clock, CheckCircle2,
   XCircle, AlertCircle, Send, Pencil, CalendarX,
+  Coffee, UtensilsCrossed,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import type { ShiftType } from '@/lib/types';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -22,6 +24,7 @@ interface ShiftInfo {
   endTime: string;
   color: string;
   textColor: string;
+  type: ShiftType;
 }
 
 interface DayEntry {
@@ -41,6 +44,12 @@ interface Declaration {
   note: string | null;
   status: DeclStatus;
   admin_note: string | null;
+  /** Pause d’au moins 15 min dans la journée */
+  pause_15min: boolean;
+  /** Collation prise */
+  had_snack: boolean;
+  /** Nourriture du travail */
+  ate_work_food: boolean;
 }
 
 const STATUS_LABEL: Record<DeclStatus, string> = {
@@ -57,6 +66,15 @@ const STATUS_STYLE: Record<DeclStatus, { pill: string; icon: React.ElementType }
 
 const WEEK_DAYS_FR = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 
+/** Shift affichable pour les heures : uniquement travail réel (pas OFF, congé, etc.). */
+function isDeclarableWorkShift(sh: { type?: string | null; short_name?: string | null }): boolean {
+  const t = (sh.type ?? '').toString().trim().toLowerCase();
+  if (t !== 'work') return false;
+  const sn = (sh.short_name ?? '').trim().toUpperCase();
+  if (sn === 'OFF') return false;
+  return true;
+}
+
 // ── Squelette ────────────────────────────────────────────────
 
 function TimesheetSkeleton() {
@@ -68,8 +86,8 @@ function TimesheetSkeleton() {
         <div className="h-5 w-40 rounded-full animate-shimmer" />
         <div className="h-8 w-8 rounded-xl animate-shimmer" />
       </div>
-      {/* 7 cartes jours */}
-      {Array.from({ length: 5 }).map((_, i) => (
+      {/* Cartes placeholder (liste variable en prod) */}
+      {Array.from({ length: 3 }).map((_, i) => (
         <div key={i} className="bg-white rounded-2xl border border-slate-100 p-4 space-y-2">
           <div className="flex items-center justify-between">
             <div className="h-4 w-24 rounded-full animate-shimmer" />
@@ -100,6 +118,10 @@ function DeclForm({ day, existing, onSaved, onCancel, employeeId }: DeclFormProp
     existing?.actual_end ?? day.shift?.endTime ?? '16:00'
   );
   const [note, setNote] = useState(existing?.note ?? '');
+  /** Coché par défaut à la création ; en édition, valeur en base */
+  const [pause15min, setPause15min] = useState(existing?.pause_15min ?? true);
+  const [hadSnack, setHadSnack] = useState(existing?.had_snack ?? false);
+  const [ateWorkFood, setAteWorkFood] = useState(existing?.ate_work_food ?? false);
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async () => {
@@ -119,6 +141,9 @@ function DeclForm({ day, existing, onSaved, onCancel, employeeId }: DeclFormProp
       actual_end:    actualEnd,
       note:          note.trim() || null,
       status:        'pending' as const,
+      pause_15min:   pause15min,
+      had_snack:     hadSnack,
+      ate_work_food: ateWorkFood,
     };
 
     let result: Declaration | null = null;
@@ -126,7 +151,17 @@ function DeclForm({ day, existing, onSaved, onCancel, employeeId }: DeclFormProp
     if (existing) {
       const { data, error } = await supabase
         .from('time_declarations')
-        .update({ actual_start: actualStart, actual_end: actualEnd, note: note.trim() || null, status: 'pending', admin_note: null, declared_at: new Date().toISOString() })
+        .update({
+          actual_start: actualStart,
+          actual_end: actualEnd,
+          note: note.trim() || null,
+          status: 'pending',
+          admin_note: null,
+          declared_at: new Date().toISOString(),
+          pause_15min: pause15min,
+          had_snack: hadSnack,
+          ate_work_food: ateWorkFood,
+        })
         .eq('id', existing.id)
         .select()
         .single();
@@ -195,6 +230,40 @@ function DeclForm({ day, existing, onSaved, onCancel, employeeId }: DeclFormProp
         />
       </div>
 
+      {/* Pauses, collation, repas */}
+      <div className="space-y-2.5 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3">
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Journée</p>
+        <label className="flex items-start gap-2.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={pause15min}
+            onChange={(e) => setPause15min(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400"
+          />
+          <span className="text-sm text-slate-700 leading-snug">
+            J’ai pris une pause d’au moins <strong>15 minutes</strong> pendant la journée
+          </span>
+        </label>
+        <label className="flex items-start gap-2.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={hadSnack}
+            onChange={(e) => setHadSnack(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400"
+          />
+          <span className="text-sm text-slate-700 leading-snug">J’ai pris une collation</span>
+        </label>
+        <label className="flex items-start gap-2.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={ateWorkFood}
+            onChange={(e) => setAteWorkFood(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400"
+          />
+          <span className="text-sm text-slate-700 leading-snug">J’ai mangé la nourriture du travail</span>
+        </label>
+      </div>
+
       {/* Boutons */}
       <div className="flex gap-2">
         <button
@@ -257,32 +326,36 @@ export default function EmployeeTimesheetsPage() {
     const [{ data: scheduleData }, { data: declData }] = await Promise.all([
       supabase
         .from('schedule_entries')
-        .select('date, shifts (name, short_name, start_time, end_time, color, text_color)')
+        .select('date, validated_start, validated_end, shifts (name, short_name, start_time, end_time, color, text_color, type)')
         .eq('employee_id', employeeId)
         .eq('visible_to_employee', true)
         .gte('date', start)
         .lte('date', end),
       supabase
         .from('time_declarations')
-        .select('id, date, planned_start, planned_end, actual_start, actual_end, note, status, admin_note')
+        .select('id, date, planned_start, planned_end, actual_start, actual_end, note, status, admin_note, pause_15min, had_snack, ate_work_food')
         .eq('employee_id', employeeId)
         .gte('date', start)
         .lte('date', end),
     ]);
 
-    // Construire un map date → shift
+    // Uniquement les jours travaillés (type « work », jamais OFF / repos / congés…)
+    const shiftMap = new Map<string, ShiftInfo>();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const shiftMap = new Map<string, ShiftInfo>((scheduleData ?? []).map((row: any) => [
-      row.date,
-      {
-        name:      row.shifts.name,
-        shortName: row.shifts.short_name,
-        startTime: row.shifts.start_time ?? '',
-        endTime:   row.shifts.end_time ?? '',
-        color:     row.shifts.color,
-        textColor: row.shifts.text_color,
-      },
-    ]));
+    for (const row of scheduleData ?? [] as any[]) {
+      const sh = row.shifts;
+      if (!sh || !isDeclarableWorkShift(sh)) continue;
+      shiftMap.set(row.date, {
+        name:      sh.name,
+        shortName: sh.short_name,
+        // Heures validées par l’admin (si présentes) = planning à jour
+        startTime: row.validated_start ?? sh.start_time ?? '',
+        endTime:   row.validated_end ?? sh.end_time ?? '',
+        color:     sh.color,
+        textColor: sh.text_color,
+        type:      sh.type as ShiftType,
+      });
+    }
 
     // Construire la liste des 7 jours de la semaine
     const weekDays = eachDayOfInterval({ start: weekStart, end: weekEnd });
@@ -291,9 +364,20 @@ export default function EmployeeTimesheetsPage() {
       return { date: dateStr, shift: shiftMap.get(dateStr) ?? null };
     }));
 
-    // Map des déclarations
+    // Map des déclarations (valeurs par défaut si colonnes absentes avant migration)
     const declMap = new Map<string, Declaration>(
-      (declData ?? []).map((d) => [d.date, d as Declaration])
+      (declData ?? []).map((d) => {
+        const x = d as Declaration;
+        return [
+          d.date,
+          {
+            ...x,
+            pause_15min: x.pause_15min ?? true,
+            had_snack: x.had_snack ?? false,
+            ate_work_food: x.ate_work_food ?? false,
+          },
+        ];
+      })
     );
     setDeclarations(declMap);
 
@@ -321,6 +405,22 @@ export default function EmployeeTimesheetsPage() {
     setDeclarations((prev) => new Map(prev).set(decl.date, decl));
     setOpenForm(null);
   };
+
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const weekStartStr = format(weekStart, 'yyyy-MM-dd');
+
+  /** Jours passés + aujourd’hui, uniquement s’il y a un shift travail déclarable (pas sans shift, pas OFF) */
+  const visibleDays = useMemo(() => {
+    return days
+      .filter((day) => {
+        if (day.date > todayStr) return false;
+        return Boolean(day.shift);
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [days, todayStr]);
+
+  /** Semaine entièrement après aujourd’hui (navigation vers une semaine future) */
+  const weekEntirelyInFuture = weekStartStr > todayStr;
 
   if (loading) return <TimesheetSkeleton />;
 
@@ -379,20 +479,48 @@ export default function EmployeeTimesheetsPage() {
         </div>
       </div>
 
+      <p className="text-[11px] text-slate-500 text-center px-1 -mt-1 leading-relaxed">
+        <strong>Jours passés et aujourd’hui</strong> où vous avez un shift <strong>travail</strong> (repos, OFF, congés… ne
+        sont pas listés). Les jours futurs sont masqués.
+      </p>
+
       {/* ── Liste des jours ────────────────────────────────── */}
       <div
         key={calendarKey}
         className={`space-y-2.5 ${animClass}`}
         style={{ opacity: isFetching ? 0.45 : 1, transition: 'opacity 0.15s ease' }}
       >
-        {days.map((day) => {
+        {visibleDays.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-5 py-12 text-center animate-fade-in">
+            <CalendarX className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+            {weekEntirelyInFuture ? (
+              <>
+                <p className="text-sm font-semibold text-slate-700">Cette semaine n’a pas encore commencé</p>
+                <p className="text-xs text-slate-500 mt-2 max-w-sm mx-auto leading-relaxed">
+                  Les jours à déclarer apparaîtront ici une fois la date passée (ou le jour même pour aujourd’hui). Revenez
+                  plus tard ou consultez une semaine déjà terminée avec les flèches.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-semibold text-slate-700">Rien à afficher pour cette période</p>
+                <p className="text-xs text-slate-500 mt-2 max-w-sm mx-auto leading-relaxed">
+                  Pas de shift travail à déclarer sur les jours déjà passés, ou tout est déjà à jour.
+                </p>
+              </>
+            )}
+          </div>
+        ) : (
+          visibleDays.map((day) => {
+          const shift = day.shift;
+          if (!shift) return null;
           const d = parseISO(day.date);
           const dayIdx = (getDay(d) + 6) % 7; // 0=Lun
           const isTodays = isToday(d);
-          const isFutureDay = isFuture(d) && !isTodays;
           const decl = declarations.get(day.date);
           const isFormOpen = openForm === day.date;
-          const canDeclare = !isFutureDay && day.shift;
+          const canDeclare = day.date <= todayStr;
+          const canEditPending = decl?.status === 'pending';
 
           return (
             <div
@@ -419,28 +547,21 @@ export default function EmployeeTimesheetsPage() {
                       </span>
                     </div>
 
-                    {/* Shift chip */}
-                    {day.shift ? (
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span
-                            className="px-2 py-0.5 rounded-lg text-xs font-bold"
-                            style={{ backgroundColor: day.shift.color, color: day.shift.textColor }}
-                          >
-                            {day.shift.shortName}
-                          </span>
-                          <span className="text-xs text-slate-500">
-                            {day.shift.startTime} – {day.shift.endTime}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-400 truncate mt-0.5">{day.shift.name}</p>
+                    {/* Shift travail */}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span
+                          className="px-2 py-0.5 rounded-lg text-xs font-bold"
+                          style={{ backgroundColor: shift.color, color: shift.textColor }}
+                        >
+                          {shift.shortName}
+                        </span>
+                        <span className="text-xs text-slate-500">
+                          {shift.startTime} – {shift.endTime}
+                        </span>
                       </div>
-                    ) : (
-                      <div className="flex items-center gap-1.5 text-slate-300">
-                        <CalendarX className="w-3.5 h-3.5 shrink-0" />
-                        <span className="text-xs">Pas de shift prévu</span>
-                      </div>
-                    )}
+                      <p className="text-[11px] text-slate-400 truncate mt-0.5">{shift.name}</p>
+                    </div>
                   </div>
 
                   {/* Action / statut */}
@@ -459,8 +580,8 @@ export default function EmployeeTimesheetsPage() {
                             </span>
                           );
                         })()}
-                        {/* Modifier si en attente */}
-                        {decl.status === 'pending' && (
+                        {/* Modifier si en attente et jour travail */}
+                        {canEditPending && (
                           <button
                             onClick={() => setOpenForm(isFormOpen ? null : day.date)}
                             className="h-7 w-7 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-indigo-600 transition-colors"
@@ -483,8 +604,6 @@ export default function EmployeeTimesheetsPage() {
                         <Clock className="w-3.5 h-3.5" />
                         {isFormOpen ? 'Annuler' : 'Déclarer'}
                       </button>
-                    ) : isFutureDay ? (
-                      <span className="text-[11px] text-slate-300 font-medium">À venir</span>
                     ) : null}
                   </div>
                 </div>
@@ -509,6 +628,28 @@ export default function EmployeeTimesheetsPage() {
                         « {decl.note} »
                       </span>
                     )}
+                    {/* Résumé pause / collation / repas */}
+                    <div className="flex flex-wrap items-center gap-1.5 w-full">
+                      {(decl.pause_15min ?? true) ? (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md">
+                          <Clock className="w-3 h-3" /> Pause 15 min
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md">
+                          <AlertCircle className="w-3 h-3" /> Pas de pause 15 min
+                        </span>
+                      )}
+                      {decl.had_snack && (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-slate-600 bg-white border border-slate-200 px-1.5 py-0.5 rounded-md">
+                          <Coffee className="w-3 h-3" /> Collation
+                        </span>
+                      )}
+                      {decl.ate_work_food && (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-slate-600 bg-white border border-slate-200 px-1.5 py-0.5 rounded-md">
+                          <UtensilsCrossed className="w-3 h-3" /> Repas travail
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -521,12 +662,14 @@ export default function EmployeeTimesheetsPage() {
                     </p>
                   </div>
                 )}
+
               </div>
 
-              {/* Formulaire inline */}
+              {/* Formulaire inline (chaque carte affichée a un shift travail) */}
               {isFormOpen && (
                 <div className="px-4 pb-4">
                   <DeclForm
+                    key={`${day.date}-${decl?.id ?? 'new'}`}
                     day={day}
                     existing={decl ?? null}
                     onSaved={handleDeclSaved}
@@ -537,10 +680,12 @@ export default function EmployeeTimesheetsPage() {
               )}
             </div>
           );
-        })}
+          })
+        )}
       </div>
 
       {/* ── Légende statuts ────────────────────────────────── */}
+      {visibleDays.length > 0 && (
       <div className="flex items-center justify-center gap-4 pt-1 animate-stagger-4">
         {(Object.entries(STATUS_STYLE) as [DeclStatus, typeof STATUS_STYLE[DeclStatus]][]).map(([status, s]) => {
           const Icon = s.icon;
@@ -552,6 +697,7 @@ export default function EmployeeTimesheetsPage() {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
