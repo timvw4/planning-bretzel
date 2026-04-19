@@ -70,6 +70,9 @@ const PRESET_COLORS = [
   { bg: '#1E293B', text: '#F8FAFC' },   // Noir (texte clair lisible sur fond sombre)
   { bg: '#FEF3C7', text: '#92400E' },   // Brun
   { bg: '#FDF6EC', text: '#A16207' },   // Beige
+  { bg: '#CCFBF1', text: '#0F766E' },   // Sarcelle (turquoise / teal)
+  { bg: '#E0E7FF', text: '#3730A3' },   // Indigo
+  { bg: '#ECFCCB', text: '#3F6212' },   // Citron vert (lime)
 ];
 
 interface ShiftForm {

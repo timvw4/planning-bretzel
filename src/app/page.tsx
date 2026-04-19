@@ -30,6 +30,15 @@ import { useShallow } from 'zustand/react/shallow';
 import { formatHours, getInitials, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import type { Employee, PlanningAlert, Shift } from '@/lib/types';
 
 // ---- Carte statistique ----
 function StatCard({
@@ -123,9 +132,190 @@ function ViewToggle({
   );
 }
 
+/** Détail stats employé pour le modal (période = vue semaine ou mois) */
+function buildEmployeeShiftBreakdown(
+  employeeId: string,
+  rangeStart: string,
+  rangeEnd: string,
+  scheduleEntries: { employeeId: string; date: string; shiftId: string }[],
+  shifts: Shift[]
+): { count: number; shift: Shift }[] {
+  const shiftMap = new Map(shifts.map((s) => [s.id, s]));
+  const counts: Record<string, { count: number; shift: Shift }> = {};
+  scheduleEntries
+    .filter((e) => e.employeeId === employeeId && e.date >= rangeStart && e.date <= rangeEnd)
+    .forEach((entry) => {
+      const shift = shiftMap.get(entry.shiftId);
+      if (!shift) return;
+      if (!counts[entry.shiftId]) counts[entry.shiftId] = { count: 0, shift };
+      counts[entry.shiftId].count++;
+    });
+  return Object.values(counts).sort((a, b) => b.count - a.count);
+}
+
+/** Contenu du modal stats employé (dashboard) */
+function EmployeeStatsDialogContent({
+  detail,
+  planningHref,
+  onClose,
+}: {
+  detail: {
+    employee: Employee;
+    view: 'week' | 'month';
+    periodLabel: string;
+    hours: number;
+    contractTarget: number;
+    ratio: number;
+    isOver: boolean;
+    shiftBreakdown: { count: number; shift: Shift }[];
+    workDays: number;
+    absenceDays: number;
+    employeeAlerts: PlanningAlert[];
+  };
+  planningHref: string;
+  onClose: () => void;
+}) {
+  const { employee, view, periodLabel, hours, contractTarget, ratio, isOver, shiftBreakdown, workDays, absenceDays, employeeAlerts } =
+    detail;
+  const barColor = isOver ? '#ef4444' : '#6366f1';
+
+  return (
+    <>
+      <DialogHeader className="text-left space-y-3">
+        <div className="flex items-start gap-3">
+          <div
+            className="w-12 h-12 rounded-xl flex items-center justify-center text-sm font-bold text-white shrink-0 shadow-sm"
+            style={{ backgroundColor: employee.color }}
+          >
+            {getInitials(employee.firstName, employee.lastName)}
+          </div>
+          <div className="min-w-0">
+            <DialogTitle className="text-lg leading-tight">
+              {employee.firstName} {employee.lastName}
+            </DialogTitle>
+            <DialogDescription className="mt-1 space-y-0.5">
+              {employee.role && <span className="block">{employee.role}</span>}
+              <span className="block text-slate-500">
+                Contrat : {employee.contractHours} h / semaine
+              </span>
+              <span className="block text-indigo-600 font-medium">{periodLabel}</span>
+            </DialogDescription>
+          </div>
+        </div>
+      </DialogHeader>
+
+      <div className="space-y-5 py-2">
+        {/* Synthèse heures */}
+        <div>
+          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">
+            {view === 'week' ? 'Heures cette semaine' : 'Heures ce mois'}
+          </p>
+          <div className="flex items-baseline justify-between gap-2 flex-wrap">
+            <span className={`text-2xl font-bold ${isOver ? 'text-red-600' : 'text-slate-900'}`}>
+              {formatHours(hours)}
+            </span>
+            <span className="text-sm text-slate-500">
+              / objectif {formatHours(contractTarget)}
+            </span>
+          </div>
+          <div className="h-2 bg-slate-100 rounded-full overflow-hidden mt-2">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{ width: `${Math.min(ratio * 100, 100)}%`, backgroundColor: barColor }}
+            />
+          </div>
+          {isOver && (
+            <p className="text-xs text-red-600 mt-1.5 font-medium">Dépassement par rapport à l&apos;objectif période</p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+            <p className="text-[10px] font-semibold text-slate-400 uppercase">Jours travaillés</p>
+            <p className="text-lg font-bold text-slate-800">{workDays}</p>
+          </div>
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+            <p className="text-[10px] font-semibold text-slate-400 uppercase">Congés / arrêts</p>
+            <p className="text-lg font-bold text-slate-800">{absenceDays}</p>
+          </div>
+        </div>
+
+        {/* Répartition shifts */}
+        <div>
+          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">
+            Répartition des shifts ({view === 'week' ? 'semaine' : 'mois'})
+          </p>
+          {shiftBreakdown.length === 0 ? (
+            <p className="text-sm text-slate-400">Aucune assignation sur cette période.</p>
+          ) : (
+            <div className="space-y-2">
+              {shiftBreakdown.map(({ shift, count }) => {
+                const max = shiftBreakdown[0]?.count || 1;
+                const pct = Math.round((count / max) * 100);
+                return (
+                  <div key={shift.id}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold shrink-0"
+                          style={{ backgroundColor: shift.color, color: shift.textColor }}
+                        >
+                          {shift.shortName}
+                        </span>
+                        <span className="text-xs text-slate-600 truncate">{shift.name}</span>
+                      </div>
+                      <span className="text-xs font-semibold text-slate-700">{count}</span>
+                    </div>
+                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${pct}%`, backgroundColor: shift.textColor, opacity: 0.75 }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Alertes ciblées employé */}
+        <div>
+          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">
+            Alertes le concernant
+          </p>
+          {employeeAlerts.length === 0 ? (
+            <p className="text-sm text-slate-400">Aucune alerte individuelle sur cette période.</p>
+          ) : (
+            <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+              {employeeAlerts.map((alert) => (
+                <AlertItem key={alert.id} alert={alert} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <DialogFooter className="flex-col sm:flex-row gap-2 sm:justify-between sm:space-x-0 border-t border-slate-100 pt-4 mt-2">
+        <Button type="button" variant="outline" className="w-full sm:w-auto gap-2" asChild>
+          <Link href={planningHref}>
+            <Calendar className="h-4 w-4" />
+            Voir le planning
+          </Link>
+        </Button>
+        <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={onClose}>
+          Fermer
+        </Button>
+      </DialogFooter>
+    </>
+  );
+}
+
 export default function DashboardPage() {
   // Vue active : 'week' (semaine) ou 'month' (mois)
   const [view, setView] = useState<'week' | 'month'>('week');
+  /** Employé sélectionné pour le panneau de stats (null = fermé) */
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
 
   const {
     employees,
@@ -261,6 +451,82 @@ export default function DashboardPage() {
       .sort((a, b) => b.monthlyHours - a.monthlyHours);
   }, [employees, getMonthlyHours, monthStart, monthEnd, monthKey]);
 
+  // Stats détaillées pour le modal (employé + période courante)
+  const employeeStatsDetail = useMemo(() => {
+    if (!selectedEmployeeId) return null;
+    const employee = employees.find((e) => e.id === selectedEmployeeId);
+    if (!employee) return null;
+
+    const shiftMap = new Map(shifts.map((s) => [s.id, s]));
+    const rangeStart = view === 'week' ? weekStart : monthStart;
+    const rangeEnd = view === 'week' ? weekEnd : monthEnd;
+    const periodLabel =
+      view === 'week'
+        ? `Semaine du ${formatDate(weekStart)} au ${formatDate(weekEnd)}`
+        : `Mois de ${format(today, 'MMMM yyyy', { locale: fr })}`;
+
+    const entries = scheduleEntries.filter(
+      (e) => e.employeeId === selectedEmployeeId && e.date >= rangeStart && e.date <= rangeEnd
+    );
+
+    let workDays = 0;
+    let absenceDays = 0;
+    entries.forEach((e) => {
+      const sh = shiftMap.get(e.shiftId);
+      if (!sh) return;
+      if (sh.type === 'work') workDays += 1;
+      if (sh.type === 'vacation' || sh.type === 'sick') absenceDays += 1;
+    });
+
+    const hours =
+      view === 'week'
+        ? getWeeklyHours(employee.id, weekStart, weekEnd)
+        : getMonthlyHours(employee.id, monthStart, monthEnd);
+
+    const contractTarget =
+      view === 'week' ? employee.contractHours : employee.contractHours * 4.33;
+    const ratio = contractTarget > 0 ? Math.min(hours / contractTarget, 1) : 0;
+    const isOver = hours > contractTarget;
+
+    const shiftBreakdown = buildEmployeeShiftBreakdown(
+      selectedEmployeeId,
+      rangeStart,
+      rangeEnd,
+      scheduleEntries,
+      shifts
+    );
+
+    const employeeAlerts = activeAlerts.filter((a) => a.employeeId === employee.id);
+
+    return {
+      employee,
+      view,
+      periodLabel,
+      hours,
+      contractTarget,
+      ratio,
+      isOver,
+      shiftBreakdown,
+      workDays,
+      absenceDays,
+      employeeAlerts,
+    };
+  }, [
+    selectedEmployeeId,
+    employees,
+    shifts,
+    scheduleEntries,
+    view,
+    weekStart,
+    weekEnd,
+    monthStart,
+    monthEnd,
+    today,
+    getWeeklyHours,
+    getMonthlyHours,
+    activeAlerts,
+  ]);
+
   // Libellé du sous-titre selon la vue
   const subtitle =
     view === 'week'
@@ -332,7 +598,9 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
                   <div>
                     <h2 className="text-sm font-semibold text-slate-900">Planning de la semaine</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">Aperçu rapide des assignations</p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Aperçu rapide des assignations — cliquez sur une ligne pour les stats détaillées.
+                    </p>
                   </div>
                   <Link
                     href="/planning/weekly"
@@ -372,7 +640,19 @@ export default function DashboardPage() {
                       {employeeWeeklySummary.map(({ employee, weeklyHours }) => {
                         const shiftMap = new Map(shifts.map((s) => [s.id, s]));
                         return (
-                          <tr key={employee.id} className="hover:bg-slate-50/50 transition-colors">
+                          <tr
+                            key={employee.id}
+                            role="button"
+                            tabIndex={0}
+                            className="hover:bg-indigo-50/60 transition-colors cursor-pointer"
+                            onClick={() => setSelectedEmployeeId(employee.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                setSelectedEmployeeId(employee.id);
+                              }
+                            }}
+                          >
                         <td className="px-4 py-2.5 bg-slate-50">
                           <div className="flex items-center gap-2">
                             <div
@@ -479,7 +759,9 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
                   <div>
                     <h2 className="text-sm font-semibold text-slate-900">Récapitulatif mensuel</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">Heures planifiées vs contrat</p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Heures planifiées vs contrat — cliquez sur une ligne pour le détail.
+                    </p>
                   </div>
                   <Link
                     href="/planning/monthly"
@@ -493,7 +775,19 @@ export default function DashboardPage() {
                     const isOver = monthlyHours > contractMonthly;
                     const barColor = isOver ? '#ef4444' : '#6366f1';
                     return (
-                      <div key={employee.id} className="px-5 py-3 hover:bg-slate-50/50 transition-colors">
+                      <div
+                        key={employee.id}
+                        role="button"
+                        tabIndex={0}
+                        className="px-5 py-3 hover:bg-indigo-50/60 transition-colors cursor-pointer"
+                        onClick={() => setSelectedEmployeeId(employee.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setSelectedEmployeeId(employee.id);
+                          }
+                        }}
+                      >
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="flex items-center gap-2">
                             <div
@@ -541,6 +835,28 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+
+      <Dialog
+        open={selectedEmployeeId !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedEmployeeId(null);
+        }}
+      >
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          {employeeStatsDetail ? (
+            <EmployeeStatsDialogContent
+              detail={employeeStatsDetail}
+              planningHref={planningHref}
+              onClose={() => setSelectedEmployeeId(null)}
+            />
+          ) : (
+            <DialogHeader>
+              <DialogTitle>Employé</DialogTitle>
+              <DialogDescription>Impossible d&apos;afficher le détail pour cet employé.</DialogDescription>
+            </DialogHeader>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

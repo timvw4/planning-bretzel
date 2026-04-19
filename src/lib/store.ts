@@ -5,10 +5,12 @@
 // ============================================================
 
 import { create } from 'zustand';
+import toast from 'react-hot-toast';
 import { Employee, Shift, ScheduleEntry, AppSettings, PlanningAlert, EmployeeGroup } from './types';
 import { defaultSettings } from '@/data/mock';
 import { buildPlanningAlerts, getAvailabilityFetchRange, getEntryDurationHours } from './utils';
 import { db } from '@/lib/supabase/db';
+import { supabaseErrorMessage } from '@/lib/supabase/errorMessage';
 import { format, startOfWeek, endOfWeek } from 'date-fns';
 
 interface PlanningStore {
@@ -52,7 +54,7 @@ interface PlanningStore {
   setCurrentDate: (date: string) => void;
 
   // ---- Settings ----
-  updateSettings: (updates: Partial<AppSettings>) => void;
+  updateSettings: (updates: Partial<AppSettings>) => Promise<void>;
 
   // ---- Validation des mois ----
   validateMonth: (monthKey: string) => void;
@@ -359,12 +361,19 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
   setCurrentDate: (date) => set({ currentDate: date }),
 
   // ---- Settings ───────────────────────────────────────────
-  updateSettings: (updates) => {
-    set((state) => {
-      const newSettings = { ...state.settings, ...updates };
-      db.updateSettings(newSettings).catch(console.error);
-      return { settings: newSettings };
-    });
+  updateSettings: async (updates) => {
+    const prev = get().settings;
+    const newSettings = { ...prev, ...updates };
+    set({ settings: newSettings });
+    try {
+      await db.updateSettings(newSettings);
+    } catch (err: unknown) {
+      set({ settings: prev });
+      const msg = supabaseErrorMessage(err);
+      console.warn('[planning] Échec enregistrement des paramètres:', msg);
+      toast.error(`Enregistrement impossible : ${msg}`);
+      throw err;
+    }
   },
 
   // ---- Validation des mois ────────────────────────────────

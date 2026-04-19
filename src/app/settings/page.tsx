@@ -128,7 +128,6 @@ export default function SettingsPage() {
     overtime: true,
     unavailable: true,
     lowRest: true,
-    weeklyReport: false,
   };
   const [notifications, setNotifications] = useState(
     settings.notifications ?? defaultNotifications
@@ -140,7 +139,7 @@ export default function SettingsPage() {
 
   const holidays = settings.holidays ?? [];
 
-  const handleAddHoliday = () => {
+  const handleAddHoliday = async () => {
     if (!newHolidayDate || !newHolidayName.trim()) return;
     const already = holidays.some((h) => h.date === newHolidayDate);
     if (already) {
@@ -149,28 +148,44 @@ export default function SettingsPage() {
     }
     const updated = [...holidays, { date: newHolidayDate, name: newHolidayName.trim() }]
       .sort((a, b) => a.date.localeCompare(b.date));
-    updateSettings({ holidays: updated });
-    setNewHolidayDate('');
-    setNewHolidayName('');
-    toast.success('Jour férié ajouté');
+    try {
+      await updateSettings({ holidays: updated });
+      setNewHolidayDate('');
+      setNewHolidayName('');
+      toast.success('Jour férié ajouté');
+    } catch {
+      /* erreur déjà affichée par le store */
+    }
   };
 
-  const handleRemoveHoliday = (date: string) => {
-    updateSettings({ holidays: holidays.filter((h) => h.date !== date) });
+  const handleRemoveHoliday = async (date: string) => {
+    try {
+      await updateSettings({ holidays: holidays.filter((h) => h.date !== date) });
+    } catch {
+      /* erreur déjà affichée par le store */
+    }
   };
 
-  const handlePrefillHolidays = () => {
+  const handlePrefillHolidays = async () => {
     const year = getYear(new Date());
     const prefilled = getFrenchHolidays(year);
     const existing = holidays.filter((h) => !prefilled.some((p) => p.date === h.date));
     const merged = [...existing, ...prefilled].sort((a, b) => a.date.localeCompare(b.date));
-    updateSettings({ holidays: merged });
-    toast.success(`Jours fériés ${year} pré-remplis`);
+    try {
+      await updateSettings({ holidays: merged });
+      toast.success(`Jours fériés ${year} pré-remplis`);
+    } catch {
+      /* erreur déjà affichée par le store */
+    }
   };
 
-  const handleSave = () => {
-    updateSettings({ notifications });
-    toast.success('Paramètres de notifications enregistrés');
+  const handleSave = async () => {
+    try {
+      await updateSettings({ notifications });
+      toast.success('Paramètres de notifications enregistrés');
+    } catch {
+      /* erreur déjà affichée par le store */
+    }
   };
 
   const handleExportData = () => {
@@ -378,12 +393,6 @@ export default function SettingsPage() {
               description={`Alerte si moins de ${settings.minRestHours}h entre deux shifts`}
               value={notifications.lowRest}
               onChange={(v) => setNotifications((n) => ({ ...n, lowRest: v }))}
-            />
-            <ToggleRow
-              label="Rapport hebdomadaire"
-              description="Résumé automatique chaque lundi matin"
-              value={notifications.weeklyReport}
-              onChange={(v) => setNotifications((n) => ({ ...n, weeklyReport: v }))}
             />
           </div>
         </SettingSection>

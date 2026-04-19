@@ -90,7 +90,6 @@ export interface NotificationSettings {
   overtime: boolean;
   unavailable: boolean;
   lowRest: boolean;
-  weeklyReport: boolean;
 }
 
 export interface AppSettings {

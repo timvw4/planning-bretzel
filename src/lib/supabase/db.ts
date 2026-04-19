@@ -4,6 +4,7 @@
 // ============================================================
 
 import { createClient } from './client';
+import { supabaseErrorMessage } from './errorMessage';
 import { Employee, Shift, ScheduleEntry, AppSettings, EmployeeGroup } from '@/lib/types';
 import { format, parse, startOfMonth, endOfMonth } from 'date-fns';
 
@@ -114,7 +115,6 @@ function dbToSettings(row: any): AppSettings {
       overtime: true,
       unavailable: true,
       lowRest: true,
-      weeklyReport: false,
     },
   };
 }
@@ -272,6 +272,16 @@ export const db = {
 
   async updateSettings(settings: AppSettings): Promise<void> {
     const supabase = createClient();
+    // Objets plain JSON pour éviter tout souci de sérialisation côté PostgREST
+    const holidays = (settings.holidays ?? []).map((h) => ({
+      date: String(h.date),
+      name: String(h.name),
+    }));
+    const notifications = {
+      overtime: Boolean(settings.notifications?.overtime ?? true),
+      unavailable: Boolean(settings.notifications?.unavailable ?? true),
+      lowRest: Boolean(settings.notifications?.lowRest ?? true),
+    };
     const { error } = await supabase
       .from('app_settings')
       .update({
@@ -282,12 +292,14 @@ export const db = {
         locale: settings.locale,
         timezone: settings.timezone,
         planning_month_mode: settings.planningMonthMode,
-        holidays: settings.holidays,
-        notifications: settings.notifications,
+        holidays,
+        notifications,
         updated_at: new Date().toISOString(),
       })
       .not('id', 'is', null);
-    if (error) throw error;
+    if (error) {
+      throw new Error(supabaseErrorMessage(error));
+    }
   },
 
   // ── Mois verrouillés ───────────────────────────────────────

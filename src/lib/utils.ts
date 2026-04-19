@@ -396,6 +396,10 @@ export const EMPLOYEE_COLORS = [
   '#1E293B', // Noir
   '#92400E', // Brun
   '#D4B896', // Beige
+  '#0D9488', // Sarcelle (teal)
+  '#4F46E5', // Indigo
+  '#DB2777', // Framboise
+  '#0E7490', // Cyan foncé
 ];
 
 export function getInitials(firstName: string, lastName: string): string {
