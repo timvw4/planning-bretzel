@@ -92,6 +92,13 @@ export interface NotificationSettings {
   lowRest: boolean;
 }
 
+/** Périmètre GPS du lieu de travail (centre + rayon en mètres). */
+export interface WorkSiteGeofence {
+  lat: number;
+  lng: number;
+  radiusM: number;
+}
+
 export interface AppSettings {
   companyName: string;
   companyLogo?: string;
@@ -104,6 +111,8 @@ export interface AppSettings {
   holidays: PublicHoliday[];
   planningMonthMode: PlanningMonthMode;
   notifications: NotificationSettings;
+  /** Optionnel : configuré dans Paramètres pour comparer les déclarations d'heures. */
+  workSite?: WorkSiteGeofence | null;
 }
 
 // Types utilitaires pour l'UI

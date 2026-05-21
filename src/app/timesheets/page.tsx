@@ -7,7 +7,7 @@ import { fr } from 'date-fns/locale';
 import {
   Clock, CheckCircle2, XCircle,
   ChevronDown, ChevronUp, AlertCircle, RefreshCw,
-  Coffee, UtensilsCrossed, AlertTriangle, ListChecks, Users,
+  Coffee, UtensilsCrossed, AlertTriangle, ListChecks, Users, MapPin,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Header } from '@/components/layout/Header';
@@ -21,6 +21,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { usePlanningStore } from '@/lib/store';
+import { useShallow } from 'zustand/react/shallow';
+import { haversineMeters } from '@/lib/geofence';
 
 // ── Sync planning : heures validées → cases du planning (schedule_entries) ──
 
@@ -80,6 +82,10 @@ interface Declaration {
   pause_15min?: boolean;
   had_snack?: boolean;
   ate_work_food?: boolean;
+  declared_inside_geofence?: boolean | null;
+  declared_lat?: number | null;
+  declared_lng?: number | null;
+  declared_accuracy_m?: number | null;
   // jointure avec employees
   employees: { first_name: string; last_name: string | null; color: string | null } | null;
 }
@@ -123,10 +129,12 @@ function initials(firstName: string, lastName: string | null): string {
 
 interface DeclRowProps {
   decl: Declaration;
+  /** Centre du périmètre défini dans Paramètres (pour distance approximative). */
+  workSite: { lat: number; lng: number; radiusM: number } | null | undefined;
   onStatusChange: (id: string, status: DeclStatus, adminNote?: string) => void;
 }
 
-function DeclRow({ decl, onStatusChange }: DeclRowProps) {
+function DeclRow({ decl, workSite, onStatusChange }: DeclRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
@@ -149,6 +157,16 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
     : null;
 
   const pauseOk = decl.pause_15min ?? true;
+
+  const geoOutside = decl.declared_inside_geofence === false;
+  const distanceFromSite =
+    workSite &&
+    typeof decl.declared_lat === 'number' &&
+    typeof decl.declared_lng === 'number' &&
+    Number.isFinite(decl.declared_lat) &&
+    Number.isFinite(decl.declared_lng)
+      ? haversineMeters(decl.declared_lat, decl.declared_lng, workSite.lat, workSite.lng)
+      : null;
 
   const handleApprove = async () => {
     setActing(true);
@@ -190,7 +208,9 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
   };
 
   return (
-    <div className={`rounded-2xl border border-slate-100 overflow-hidden transition-all duration-200 ${TAB_STYLE[decl.status].row}`}>
+    <div
+      className={`rounded-2xl border overflow-hidden transition-all duration-200 ${TAB_STYLE[decl.status].row} ${geoOutside ? 'border-red-300 ring-1 ring-red-100' : 'border-slate-100'}`}
+    >
       {/* Ligne principale */}
       <div
         className="p-4 flex items-center gap-4 cursor-pointer select-none"
@@ -211,6 +231,12 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
             <span className="text-xs text-slate-400">
               {format(parseISO(decl.date), 'EEEE d MMMM yyyy', { locale: fr })}
             </span>
+            {geoOutside && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-lg border bg-red-50 text-red-700 border-red-200">
+                <AlertTriangle className="w-3 h-3" />
+                Hors périmètre
+              </span>
+            )}
           </div>
           {/* Heures */}
           <div className="flex items-center gap-3 mt-1 flex-wrap">
@@ -310,6 +336,39 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
               </p>
             </div>
           </div>
+
+          {/* Position au moment de la déclaration */}
+          {typeof decl.declared_lat === 'number' && typeof decl.declared_lng === 'number' ? (
+            <div
+              className={`rounded-xl px-3 py-2.5 text-xs space-y-1 ${
+                geoOutside ? 'bg-red-50 border border-red-100' : 'bg-slate-50 border border-slate-100'
+              }`}
+            >
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1">
+                <MapPin className="w-3.5 h-3.5" />
+                Position enregistrée
+              </p>
+              <p className="font-mono text-slate-700">
+                {decl.declared_lat.toFixed(5)}, {decl.declared_lng.toFixed(5)}
+              </p>
+              {decl.declared_accuracy_m != null && Number.isFinite(decl.declared_accuracy_m) && (
+                <p className="text-slate-500">
+                  Précision signal ~{Math.round(decl.declared_accuracy_m)} m
+                </p>
+              )}
+              {distanceFromSite != null && workSite ? (
+                <p className={`${geoOutside ? 'text-red-700 font-semibold' : 'text-slate-600'}`}>
+                  Distance du centre du périmètre configuré : ~{Math.round(distanceFromSite)} m (rayon{' '}
+                  {workSite.radiusM} m)
+                </p>
+              ) : !workSite ? (
+                <p className="text-amber-700">Définissez le périmètre dans Paramètres pour une distance de référence.</p>
+              ) : null}
+              {geoOutside && (
+                <p className="text-red-700 font-semibold">Comptée comme hors périmètre selon les règles de l&apos;app.</p>
+              )}
+            </div>
+          ) : null}
 
           {/* Pause, collation, repas */}
           {!pauseOk && (
@@ -425,6 +484,9 @@ function DeclRow({ decl, onStatusChange }: DeclRowProps) {
 // ── Page principale ──────────────────────────────────────────
 
 export default function AdminTimesheetsPage() {
+  const { settings } = usePlanningStore(
+    useShallow((s) => ({ settings: s.settings }))
+  );
   const [tab, setTab] = useState<DeclStatus>('pending');
   const [declarations, setDeclarations] = useState<Declaration[]>([]);
   const [loading, setLoading] = useState(true);
@@ -434,6 +496,8 @@ export default function AdminTimesheetsPage() {
   /** null = tous les employés, sinon l'id de l'employé sélectionné */
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
   const [empDropdownOpen, setEmpDropdownOpen] = useState(false);
+  /** Filtre liste : lignes où la déclaration a été faite hors du rayon travail */
+  const [onlyOutsideFence, setOnlyOutsideFence] = useState(false);
 
   const fetchAll = async (silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true);
@@ -520,7 +584,13 @@ export default function AdminTimesheetsPage() {
     [declarations, selectedEmployeeId]
   );
 
-  const filtered = useMemo(() => byEmployee.filter((d) => d.status === tab), [byEmployee, tab]);
+  const filtered = useMemo(() => {
+    let list = byEmployee.filter((d) => d.status === tab);
+    if (onlyOutsideFence) {
+      list = list.filter((d) => d.declared_inside_geofence === false);
+    }
+    return list;
+  }, [byEmployee, tab, onlyOutsideFence]);
 
   const counts = useMemo(() => ({
     pending:  byEmployee.filter((d) => d.status === 'pending').length,
@@ -600,6 +670,19 @@ export default function AdminTimesheetsPage() {
               <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             </button>
           </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant={onlyOutsideFence ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setOnlyOutsideFence((v) => !v)}
+            className="gap-1.5"
+          >
+            <MapPin className="w-4 h-4 shrink-0" />
+            Hors périmètre uniquement
+          </Button>
         </div>
 
         {/* ── Filtre par employé ────────────────────────────── */}
@@ -698,14 +781,18 @@ export default function AdminTimesheetsPage() {
                 : <XCircle className="w-8 h-8 text-slate-300" />}
             </div>
             <p className="text-sm font-semibold text-slate-500">
-              {tab === 'pending'
+              {onlyOutsideFence
+                ? 'Aucune déclaration hors périmètre'
+                : tab === 'pending'
                 ? 'Aucune déclaration en attente'
                 : tab === 'approved'
                 ? 'Aucune déclaration approuvée'
                 : 'Aucune déclaration refusée'}
             </p>
             <p className="text-xs text-slate-400 mt-1">
-              {tab === 'pending'
+              {onlyOutsideFence
+                ? 'Changez de filtre ou d’onglet, ou désactivez « Hors périmètre uniquement ».'
+                : tab === 'pending'
                 ? 'Tout est à jour !'
                 : 'Elles apparaîtront ici une fois traitées.'}
             </p>
@@ -718,7 +805,7 @@ export default function AdminTimesheetsPage() {
               </p>
             )}
             {filtered.map((decl) => (
-              <DeclRow key={decl.id} decl={decl} onStatusChange={handleStatusChange} />
+              <DeclRow key={decl.id} decl={decl} workSite={settings.workSite} onStatusChange={handleStatusChange} />
             ))}
           </div>
         )}
