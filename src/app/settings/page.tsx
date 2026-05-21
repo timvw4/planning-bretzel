@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import dynamic from 'next/dynamic';
 import {
   Building2,
   Clock,
@@ -13,6 +14,7 @@ import {
   Plus,
   X,
   RefreshCw,
+  MapPin,
 } from 'lucide-react';
 import { format, getYear } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -22,6 +24,18 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { usePlanningStore } from '@/lib/store';
 import { PublicHoliday } from '@/lib/types';
+
+const WorkSiteMapPicker = dynamic(
+  () => import('@/components/settings/WorkSiteMapPicker').then((mod) => mod.WorkSiteMapPicker),
+  {
+    ssr: false,
+    loading: () => (
+      <p className="text-xs text-slate-400 py-10 text-center rounded-xl border border-dashed border-slate-200">
+        Chargement de la carte…
+      </p>
+    ),
+  }
+);
 
 function SettingSection({
   icon: Icon,
@@ -266,6 +280,18 @@ export default function SettingsPage() {
               </select>
             </div>
           </div>
+        </SettingSection>
+
+        {/* Périmètre travail — GPS déclarations d&apos;heures */}
+        <SettingSection
+          icon={MapPin}
+          title="Périmètre travail (GPS)"
+          description="Les employés sur « Mes heures » envoient leur position au moment de la déclaration. Si un périmètre est actif, il doit être dans le cercle."
+        >
+          <WorkSiteMapPicker
+            value={settings.workSite ?? null}
+            onChange={(workSite) => void updateSettings({ workSite })}
+          />
         </SettingSection>
 
         {/* Planning */}

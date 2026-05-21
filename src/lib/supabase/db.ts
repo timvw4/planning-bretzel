@@ -5,7 +5,7 @@
 
 import { createClient } from './client';
 import { supabaseErrorMessage } from './errorMessage';
-import { Employee, Shift, ScheduleEntry, AppSettings, EmployeeGroup } from '@/lib/types';
+import { Employee, Shift, ScheduleEntry, AppSettings, EmployeeGroup, WorkSiteGeofence } from '@/lib/types';
 import { format, parse, startOfMonth, endOfMonth } from 'date-fns';
 
 // ── Conversions Supabase (snake_case) ↔ App (camelCase) ──────
@@ -101,6 +101,20 @@ function dbToEntry(row: any): ScheduleEntry {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function dbToSettings(row: any): AppSettings {
+  const workSite = ((): WorkSiteGeofence | null => {
+    const la = row.work_site_latitude;
+    const lo = row.work_site_longitude;
+    const r = row.work_site_radius_m;
+    if (la == null || lo == null || r == null) return null;
+    const lat = typeof la === 'number' ? la : Number.parseFloat(String(la));
+    const lng = typeof lo === 'number' ? lo : Number.parseFloat(String(lo));
+    const radiusM = typeof r === 'number' ? r : Number.parseFloat(String(r));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radiusM) || radiusM <= 0) {
+      return null;
+    }
+    return { lat, lng, radiusM };
+  })();
+
   return {
     companyName: row.company_name ?? 'Mon Entreprise',
     weekStartDay: row.week_start_day ?? 1,
@@ -116,6 +130,7 @@ function dbToSettings(row: any): AppSettings {
       unavailable: true,
       lowRest: true,
     },
+    workSite,
   };
 }
 
@@ -294,6 +309,9 @@ export const db = {
         planning_month_mode: settings.planningMonthMode,
         holidays,
         notifications,
+        work_site_latitude: settings.workSite?.lat ?? null,
+        work_site_longitude: settings.workSite?.lng ?? null,
+        work_site_radius_m: settings.workSite?.radiusM ?? null,
         updated_at: new Date().toISOString(),
       })
       .not('id', 'is', null);

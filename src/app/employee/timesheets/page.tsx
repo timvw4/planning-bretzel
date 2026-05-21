@@ -13,7 +13,9 @@ import {
   Coffee, UtensilsCrossed,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import type { ShiftType } from '@/lib/types';
+import type { ShiftType, WorkSiteGeofence } from '@/lib/types';
+import { isInsideGeofence } from '@/lib/geofence';
+import { requestDevicePosition } from '@/lib/geolocation';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -50,6 +52,11 @@ interface Declaration {
   had_snack: boolean;
   /** Nourriture du travail */
   ate_work_food: boolean;
+  /** Position au moment de la déclaration (optionnel si périmètre désactivé ou GPS refusé) */
+  declared_lat?: number | null;
+  declared_lng?: number | null;
+  declared_accuracy_m?: number | null;
+  declared_inside_geofence?: boolean | null;
 }
 
 const STATUS_LABEL: Record<DeclStatus, string> = {
@@ -65,6 +72,69 @@ const STATUS_STYLE: Record<DeclStatus, { pill: string; icon: React.ElementType }
 };
 
 const WEEK_DAYS_FR = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+
+type GeoDeclCols = {
+  declared_lat: number | null;
+  declared_lng: number | null;
+  declared_accuracy_m: number | null;
+  declared_inside_geofence: boolean | null;
+};
+
+/**
+ * Demande le GPS et remplit les colonnes pour Supabase.
+ * Si un périmètre entreprise est défini, la position est obligatoire (sinon on bloque).
+ * Sinon, on tente quand même une trace facultative.
+ */
+async function resolveDeclarationGeolocation(
+  workSite: WorkSiteGeofence | null
+): Promise<GeoDeclCols | 'blocked'> {
+  const empty: GeoDeclCols = {
+    declared_lat: null,
+    declared_lng: null,
+    declared_accuracy_m: null,
+    declared_inside_geofence: null,
+  };
+
+  const hasFence =
+    workSite != null &&
+    Number.isFinite(workSite.lat) &&
+    Number.isFinite(workSite.lng) &&
+    Number.isFinite(workSite.radiusM) &&
+    workSite.radiusM > 0;
+
+  if (!hasFence) {
+    try {
+      const p = await requestDevicePosition();
+      return {
+        declared_lat: p.lat,
+        declared_lng: p.lng,
+        declared_accuracy_m: p.accuracyM,
+        declared_inside_geofence: null,
+      };
+    } catch {
+      return empty;
+    }
+  }
+
+  try {
+    const p = await requestDevicePosition();
+    const inside = isInsideGeofence(
+      p.lat,
+      p.lng,
+      workSite!.lat,
+      workSite!.lng,
+      workSite!.radiusM
+    );
+    return {
+      declared_lat: p.lat,
+      declared_lng: p.lng,
+      declared_accuracy_m: p.accuracyM,
+      declared_inside_geofence: inside,
+    };
+  } catch {
+    return 'blocked';
+  }
+}
 
 /** Shift affichable pour les heures : uniquement travail réel (pas OFF, congé, etc.). */
 function isDeclarableWorkShift(sh: { type?: string | null; short_name?: string | null }): boolean {
@@ -108,9 +178,11 @@ interface DeclFormProps {
   onSaved: (decl: Declaration) => void;
   onCancel: () => void;
   employeeId: string;
+  /** Périmètre depuis app_settings (lecture seule pour l’employé). */
+  workSite: WorkSiteGeofence | null;
 }
 
-function DeclForm({ day, existing, onSaved, onCancel, employeeId }: DeclFormProps) {
+function DeclForm({ day, existing, onSaved, onCancel, employeeId, workSite }: DeclFormProps) {
   const [actualStart, setActualStart] = useState(
     existing?.actual_start ?? day.shift?.startTime ?? '08:00'
   );
@@ -130,20 +202,34 @@ function DeclForm({ day, existing, onSaved, onCancel, employeeId }: DeclFormProp
       return;
     }
     setSaving(true);
+
+    const geoResult = await resolveDeclarationGeolocation(workSite);
+    if (geoResult === 'blocked') {
+      toast.error(
+        'La position GPS est requise pour valider votre déclaration (périmètre actif). Autorisez la localisation ou réessayez à l\'extérieur.'
+      );
+      setSaving(false);
+      return;
+    }
+
     const supabase = createClient();
 
     const payload = {
-      employee_id:   employeeId,
-      date:          day.date,
+      employee_id: employeeId,
+      date: day.date,
       planned_start: day.shift?.startTime ?? null,
-      planned_end:   day.shift?.endTime ?? null,
-      actual_start:  actualStart,
-      actual_end:    actualEnd,
-      note:          note.trim() || null,
-      status:        'pending' as const,
-      pause_15min:   pause15min,
-      had_snack:     hadSnack,
+      planned_end: day.shift?.endTime ?? null,
+      actual_start: actualStart,
+      actual_end: actualEnd,
+      note: note.trim() || null,
+      status: 'pending' as const,
+      pause_15min: pause15min,
+      had_snack: hadSnack,
       ate_work_food: ateWorkFood,
+      declared_lat: geoResult.declared_lat,
+      declared_lng: geoResult.declared_lng,
+      declared_accuracy_m: geoResult.declared_accuracy_m,
+      declared_inside_geofence: geoResult.declared_inside_geofence,
     };
 
     let result: Declaration | null = null;
@@ -161,19 +247,27 @@ function DeclForm({ day, existing, onSaved, onCancel, employeeId }: DeclFormProp
           pause_15min: pause15min,
           had_snack: hadSnack,
           ate_work_food: ateWorkFood,
+          declared_lat: geoResult.declared_lat,
+          declared_lng: geoResult.declared_lng,
+          declared_accuracy_m: geoResult.declared_accuracy_m,
+          declared_inside_geofence: geoResult.declared_inside_geofence,
         })
         .eq('id', existing.id)
         .select()
         .single();
-      if (error) { toast.error('Erreur lors de la mise à jour'); setSaving(false); return; }
+      if (error) {
+        toast.error('Erreur lors de la mise à jour');
+        setSaving(false);
+        return;
+      }
       result = data as Declaration;
     } else {
-      const { data, error } = await supabase
-        .from('time_declarations')
-        .insert(payload)
-        .select()
-        .single();
-      if (error) { toast.error('Erreur lors de l\'enregistrement'); setSaving(false); return; }
+      const { data, error } = await supabase.from('time_declarations').insert(payload).select().single();
+      if (error) {
+        toast.error('Erreur lors de l\'enregistrement');
+        setSaving(false);
+        return;
+      }
       result = data as Declaration;
     }
 
@@ -229,6 +323,13 @@ function DeclForm({ day, existing, onSaved, onCancel, employeeId }: DeclFormProp
           className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400"
         />
       </div>
+
+      {workSite && Number.isFinite(workSite.radiusM) && workSite.radiusM > 0 && (
+        <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 leading-relaxed">
+          Un <strong>périmètre lieu de travail</strong> est activé : vous devez autoriser la{' '}
+          <strong>géolocalisation</strong> pour envoyer votre déclaration depuis le téléphone.
+        </p>
+      )}
 
       {/* Pauses, collation, repas */}
       <div className="space-y-2.5 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3">
@@ -297,6 +398,8 @@ export default function EmployeeTimesheetsPage() {
   const [openForm, setOpenForm] = useState<string | null>(null); // date du formulaire ouvert
   const [calendarKey, setCalendarKey] = useState(0);
   const [animClass, setAnimClass] = useState('animate-fade-in');
+  /** Périmètre entreprise (lecture app_settings) pour la contrôle GPS à la déclaration. */
+  const [workSiteFence, setWorkSiteFence] = useState<WorkSiteGeofence | null>(null);
   const pendingDir = useRef<'left' | 'right' | null>(null);
   const initialLoadDone = useRef(false);
 
@@ -312,6 +415,38 @@ export default function EmployeeTimesheetsPage() {
         .from('profiles').select('employee_id').eq('id', data.user.id).single();
       setEmployeeId(profile?.employee_id ?? null);
     });
+  }, []);
+
+  // Centre + rayon du site (contrôle GPS si périmètre actif)
+  useEffect(() => {
+    let cancelled = false;
+    const supabase = createClient();
+    void (async () => {
+      const { data } = await supabase
+        .from('app_settings')
+        .select('work_site_latitude, work_site_longitude, work_site_radius_m')
+        .maybeSingle();
+      if (cancelled || !data) return;
+      const row = data as Record<string, unknown>;
+      const la = row['work_site_latitude'];
+      const lo = row['work_site_longitude'];
+      const r = row['work_site_radius_m'];
+      if (la == null || lo == null || r == null) {
+        setWorkSiteFence(null);
+        return;
+      }
+      const lat = typeof la === 'number' ? la : Number.parseFloat(String(la));
+      const lng = typeof lo === 'number' ? lo : Number.parseFloat(String(lo));
+      const radiusM = typeof r === 'number' ? r : Number.parseFloat(String(r));
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radiusM) || radiusM <= 0) {
+        setWorkSiteFence(null);
+        return;
+      }
+      setWorkSiteFence({ lat, lng, radiusM });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Charger shifts + déclarations de la semaine
@@ -333,7 +468,9 @@ export default function EmployeeTimesheetsPage() {
         .lte('date', end),
       supabase
         .from('time_declarations')
-        .select('id, date, planned_start, planned_end, actual_start, actual_end, note, status, admin_note, pause_15min, had_snack, ate_work_food')
+        .select(
+          'id, date, planned_start, planned_end, actual_start, actual_end, note, status, admin_note, pause_15min, had_snack, ate_work_food, declared_lat, declared_lng, declared_accuracy_m, declared_inside_geofence'
+        )
         .eq('employee_id', employeeId)
         .gte('date', start)
         .lte('date', end),
@@ -675,6 +812,7 @@ export default function EmployeeTimesheetsPage() {
                     onSaved={handleDeclSaved}
                     onCancel={() => setOpenForm(null)}
                     employeeId={employeeId}
+                    workSite={workSiteFence}
                   />
                 </div>
               )}

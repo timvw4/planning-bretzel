@@ -347,6 +347,7 @@ export const defaultSettings: AppSettings = {
     unavailable: true,
     lowRest: true,
   },
+  workSite: null,
   holidays: [
     { date: '2026-01-01', name: 'Jour de l\'An' },
     { date: '2026-04-06', name: 'Lundi de Pâques' },
