@@ -241,7 +241,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         <div className="border-t border-slate-100 px-4 py-4">
           <div className="rounded-lg bg-indigo-50 p-3">
             <p className="text-xs font-semibold text-indigo-700">Boulangerie Bretzel</p>
-            <p className="text-xs text-indigo-500 mt-0.5">© 2026 - version 0.1</p>
+            <p className="text-xs text-indigo-500 mt-0.5">© 2026 - version 0.1.1</p>
           </div>
         </div>
       )}
