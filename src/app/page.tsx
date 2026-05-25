@@ -28,6 +28,7 @@ import { Header } from '@/components/layout/Header';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
 import { formatHours, getInitials, formatDate } from '@/lib/utils';
+import { getPositionLabel } from '@/lib/employeePosition';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -194,7 +195,7 @@ function EmployeeStatsDialogContent({
               {employee.firstName} {employee.lastName}
             </DialogTitle>
             <DialogDescription className="mt-1 space-y-0.5">
-              {employee.role && <span className="block">{employee.role}</span>}
+              <span className="block">{getPositionLabel(employee.position)}</span>
               <span className="block text-slate-500">
                 Contrat : {employee.contractHours} h / semaine
               </span>
@@ -988,7 +989,7 @@ function QuickActionsCard() {
           className="flex items-center justify-between w-full text-xs font-medium text-white/90 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg px-3 py-2 transition-all"
         >
           <span className="flex items-center gap-2">
-            <Calendar className="h-4 w-4" /> Planning mensuel
+            <Calendar className="h-4 w-4" /> Planning prévu
           </span>
           <ArrowRight className="h-3.5 w-3.5" />
         </Link>

@@ -1,7 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Employee, AvailabilityDay, ContractType } from '@/lib/types';
+import { Employee, AvailabilityDay, ContractType, EmployeePosition } from '@/lib/types';
+import {
+  EMPLOYEE_POSITIONS,
+  POSITION_RULES,
+} from '@/lib/employeePosition';
 import {
   Dialog,
   DialogContent,
@@ -32,13 +36,13 @@ const AVAILABILITY_DAYS: AvailabilityDay[] = [
 const defaultForm: Omit<Employee, 'id' | 'createdAt'> = {
   firstName: '',
   lastName: '',
-  role: '',
+  position: 'vente',
   email: '',
   phone: '',
   color: EMPLOYEE_COLORS[0],
-  availability: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+  availability: POSITION_RULES.vente.defaultAvailability,
   contractType: 'full-time',
-  contractHours: 35,
+  contractHours: POSITION_RULES.vente.defaultContractHours,
   notes: '',
   isActive: true,
   inactiveMonths: [],
@@ -63,6 +67,7 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
   const validate = () => {
     const newErrors: Record<string, string> = {};
     if (!form.firstName.trim()) newErrors.firstName = 'Le prénom est requis';
+    if (!form.position) newErrors.position = 'Le poste est requis';
     // Email optionnel, mais validé si renseigné
     if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
       newErrors.email = "L'email n'est pas valide";
@@ -86,6 +91,18 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
         : [...prev.availability, day],
     }));
   };
+
+  const handlePositionChange = (position: EmployeePosition) => {
+    const rules = POSITION_RULES[position];
+    setForm((prev) => ({
+      ...prev,
+      position,
+      availability: rules.defaultAvailability,
+      contractHours: rules.defaultContractHours,
+    }));
+  };
+
+  const positionRules = POSITION_RULES[form.position];
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -125,17 +142,40 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
             </div>
           </div>
 
-          {/* Rôle */}
+          {/* Poste */}
           <div className="space-y-1.5">
-            <Label htmlFor="role">
-              Poste / Rôle <span className="text-red-400">*</span>
+            <Label>
+              Poste <span className="text-red-400">*</span>
             </Label>
-            <Input
-              id="role"
-              placeholder="Chef de rang, Barman..."
-              value={form.role}
-              onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
-            />
+            <Select
+              value={form.position}
+              onValueChange={(v) => handlePositionChange(v as EmployeePosition)}
+            >
+              <SelectTrigger className={errors.position ? 'border-red-300' : ''}>
+                <SelectValue placeholder="Choisir un poste" />
+              </SelectTrigger>
+              <SelectContent>
+                {EMPLOYEE_POSITIONS.map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {POSITION_RULES[key].label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {errors.position && <p className="text-xs text-red-500">{errors.position}</p>}
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600 space-y-1">
+              <p>{positionRules.description}</p>
+              <p>
+                <span className="font-medium text-slate-700">Horaire type :</span>{' '}
+                {positionRules.typicalHours}
+              </p>
+              <p className="text-slate-500">
+                {positionRules.canWorkNight ? 'Peut travailler de nuit · ' : ''}
+                {positionRules.canWorkSunday
+                  ? 'Peut travailler le dimanche'
+                  : 'Pas de travail le dimanche'}
+              </p>
+            </div>
           </div>
 
           {/* Email + Téléphone */}
@@ -231,18 +271,28 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
 
           {/* Disponibilité */}
           <div className="space-y-2">
-            <Label>Jours de disponibilité</Label>
+            <Label>Jours habituels de travail</Label>
             <div className="flex flex-wrap gap-2">
               {AVAILABILITY_DAYS.map((day) => {
                 const isSelected = form.availability.includes(day);
+                const isSundayBlocked =
+                  day === 'sunday' && !positionRules.canWorkSunday;
                 return (
                   <button
                     key={day}
                     type="button"
-                    onClick={() => toggleAvailability(day)}
+                    disabled={isSundayBlocked}
+                    title={
+                      isSundayBlocked
+                        ? 'Non applicable pour ce poste'
+                        : undefined
+                    }
+                    onClick={() => !isSundayBlocked && toggleAvailability(day)}
                     className={cn(
                       'px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 border',
-                      isSelected
+                      isSundayBlocked
+                        ? 'bg-slate-100 text-slate-300 border-slate-100 cursor-not-allowed'
+                        : isSelected
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
                         : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
                     )}
@@ -252,6 +302,9 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
                 );
               })}
             </div>
+            <p className="text-[11px] text-slate-400">
+              Pré-rempli selon le poste — ajustez si besoin (ex. temps partiel).
+            </p>
           </div>
 
           {/* Notes */}

@@ -7,8 +7,17 @@ import {
   getDay, isToday, addMonths, isPast, parseISO,
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { ChevronLeft, ChevronRight, Lock, CheckCircle, Clock, XCircle, Send, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Lock, CheckCircle, Clock, XCircle, Send, AlertTriangle, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
+import type { AvailabilityDay } from '@/lib/types';
+import {
+  formatWorkDaysSummary,
+  getEffectiveAvailabilityStatus,
+  getNextWorkDayAvailabilityStatus,
+  getPositionLabel,
+  isEmployeeWorkDay,
+  parseEmployeePosition,
+} from '@/lib/employeePosition';
 
 type AvailabilityStatus = 'available' | 'unavailable' | 'preferred';
 type MonthState = 'editable' | 'validated' | 'request_pending' | 'request_rejected';
@@ -26,14 +35,8 @@ const STATUS_CONFIG: Record<AvailabilityStatus, {
   unavailable: { label: 'Indisponible', icon: '✗', bg: '#FEE2E2', text: '#DC2626', border: '#FCA5A5' },
 };
 
-// Cycle : null → available → preferred → unavailable → null
-const CYCLE: (AvailabilityStatus | null)[] = [null, 'available', 'preferred', 'unavailable'];
+// Cycle sur les jours habituels : dispo → préféré → indispo → dispo
 const WEEK_DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
-
-function getNextStatus(current: AvailabilityStatus | undefined): AvailabilityStatus | null {
-  const idx = CYCLE.indexOf(current ?? null);
-  return CYCLE[(idx + 1) % CYCLE.length];
-}
 
 // ── Squelette de chargement initial ─────────────────────────
 function AvailabilitySkeleton() {
@@ -76,6 +79,9 @@ function AvailabilitySkeleton() {
 export default function EmployeeAvailabilityPage() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [employeeId, setEmployeeId] = useState<string | null>(null);
+  /** Jours habituels définis par l’admin dans la fiche employé */
+  const [workDays, setWorkDays] = useState<AvailabilityDay[]>([]);
+  const [employeePositionLabel, setEmployeePositionLabel] = useState('');
   const [availabilities, setAvailabilities] = useState<Map<string, AvailabilityEntry>>(new Map());
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
@@ -116,7 +122,8 @@ export default function EmployeeAvailabilityPage() {
     const start = format(startOfMonth(currentDate), 'yyyy-MM-dd');
     const end = format(endOfMonth(currentDate), 'yyyy-MM-dd');
 
-    const [{ data: avails }, { data: validation }, { data: unlockReq }] = await Promise.all([
+    const [{ data: avails }, { data: validation }, { data: unlockReq }, { data: empRow }] =
+      await Promise.all([
       supabase.from('availability_requests').select('date, status')
         .eq('employee_id', employeeId).gte('date', start).lte('date', end),
       supabase.from('availability_validations').select('id')
@@ -124,7 +131,15 @@ export default function EmployeeAvailabilityPage() {
       supabase.from('availability_unlock_requests').select('id, status')
         .eq('employee_id', employeeId).eq('month_key', monthKey)
         .order('requested_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('employees').select('availability, position')
+        .eq('id', employeeId).maybeSingle(),
     ]);
+
+    const parsedWorkDays = (empRow?.availability ?? []) as AvailabilityDay[];
+    setWorkDays(parsedWorkDays);
+    if (empRow?.position) {
+      setEmployeePositionLabel(getPositionLabel(parseEmployeePosition(empRow.position)));
+    }
 
     const map = new Map<string, AvailabilityEntry>();
     (avails ?? []).forEach((row) =>
@@ -156,38 +171,46 @@ export default function EmployeeAvailabilityPage() {
   useEffect(() => { loadData(); }, [loadData]);
 
   // ── Clic sur un jour : mise à jour optimiste ─────────────────
-  const handleDayClick = async (dateStr: string) => {
+  const handleDayClick = async (dateStr: string, day: Date) => {
     if (!employeeId || monthState !== 'editable') return;
+    if (!isEmployeeWorkDay(day, workDays)) return;
     if (isPast(parseISO(dateStr)) && dateStr !== format(new Date(), 'yyyy-MM-dd')) {
       toast.error('Impossible de modifier un jour passé');
       return;
     }
 
-    const current = availabilities.get(dateStr);
-    const next = getNextStatus(current?.status);
+    const stored = availabilities.get(dateStr);
+    const effective = getEffectiveAvailabilityStatus(day, workDays, stored?.status);
+    if (!effective) return;
 
-    // Snapshot pour rollback en cas d'erreur
+    const next = getNextWorkDayAvailabilityStatus(effective);
     const snapshot = new Map(availabilities);
-
-    // Mise à jour immédiate dans l'UI
     const optimistic = new Map(availabilities);
-    if (!next) { optimistic.delete(dateStr); }
-    else { optimistic.set(dateStr, { date: dateStr, status: next }); }
+
+    // Retour à « disponible » par défaut = suppression de l’entrée en base
+    if (next === 'available') {
+      optimistic.delete(dateStr);
+    } else {
+      optimistic.set(dateStr, { date: dateStr, status: next });
+    }
     setAvailabilities(optimistic);
     setSyncingDate(dateStr);
 
-    // Sauvegarde en arrière-plan
     const supabase = createClient();
-    const { error } = !next
-      ? await supabase.from('availability_requests').delete()
-          .eq('employee_id', employeeId).eq('date', dateStr)
-      : await supabase.from('availability_requests').upsert(
-          { employee_id: employeeId, date: dateStr, status: next },
-          { onConflict: 'employee_id,date' }
-        );
+    const { error } =
+      next === 'available'
+        ? await supabase
+            .from('availability_requests')
+            .delete()
+            .eq('employee_id', employeeId)
+            .eq('date', dateStr)
+        : await supabase.from('availability_requests').upsert(
+            { employee_id: employeeId, date: dateStr, status: next },
+            { onConflict: 'employee_id,date' }
+          );
 
     if (error) {
-      setAvailabilities(snapshot); // rollback
+      setAvailabilities(snapshot);
       toast.error('Erreur de sauvegarde, veuillez réessayer');
     }
     setSyncingDate(null);
@@ -195,6 +218,10 @@ export default function EmployeeAvailabilityPage() {
 
   const handleValidate = async () => {
     if (!employeeId) return;
+    if (workDays.length === 0) {
+      toast.error('Aucun jour habituel configuré — contactez votre responsable.');
+      return;
+    }
     setSubmitting(true);
     const supabase = createClient();
     const { error } = await supabase.from('availability_validations')
@@ -227,7 +254,13 @@ export default function EmployeeAvailabilityPage() {
   const monthEnd = endOfMonth(currentDate);
   const days = eachDayOfInterval({ start: monthStart, end: monthEnd });
   const startPad = (getDay(monthStart) + 6) % 7;
-  const countByStatus = (s: AvailabilityStatus) => [...availabilities.values()].filter((a) => a.status === s).length;
+  const workDaysSummary = formatWorkDaysSummary(workDays);
+  const countByStatus = (s: AvailabilityStatus) =>
+    days.filter((day) => {
+      const dateStr = format(day, 'yyyy-MM-dd');
+      const stored = availabilities.get(dateStr)?.status;
+      return getEffectiveAvailabilityStatus(day, workDays, stored) === s;
+    }).length;
   const isLocked = monthState !== 'editable';
 
   if (!loading && employeeId === null) {
@@ -302,6 +335,30 @@ export default function EmployeeAvailabilityPage() {
         </div>
       )}
 
+      {/* ── Jours habituels (fiche admin) ─────────────────────── */}
+      {workDays.length > 0 ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 animate-stagger-1">
+          <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+          <div className="text-xs text-indigo-900 leading-relaxed">
+            <p className="font-semibold">
+              Vos jours habituels{employeePositionLabel ? ` (${employeePositionLabel})` : ''}
+            </p>
+            <p className="text-indigo-700 mt-0.5">
+              {workDaysSummary} — définis par votre responsable. Seuls ces jours sont modifiables.
+              Par défaut vous êtes <strong>disponible</strong> ; indiquez les exceptions (préféré ou
+              indisponible).
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 animate-stagger-1">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-800">
+            Aucun jour habituel n&apos;est configuré sur votre fiche. Contactez votre responsable.
+          </p>
+        </div>
+      )}
+
       {/* ── Résumé compteurs ─────────────────────────────────── */}
       <div className="grid grid-cols-3 gap-3 animate-stagger-2">
         {(Object.entries(STATUS_CONFIG) as [AvailabilityStatus, typeof STATUS_CONFIG[AvailabilityStatus]][]).map(([status, cfg]) => (
@@ -353,45 +410,63 @@ export default function EmployeeAvailabilityPage() {
 
         {/* Légende compacte du cycle (uniquement si éditable) */}
         {!isLocked && (
-          <div className="flex items-center justify-center gap-1.5 px-4 py-2.5 bg-slate-50/60 border-b border-slate-100">
-            <span className="text-[10px] text-slate-400 font-medium">Cycle :</span>
-            {/* Aucun */}
-            <span className="text-[10px] text-slate-300 font-medium">Aucun</span>
-            <span className="text-[10px] text-slate-300">→</span>
-            {/* Disponible */}
+          <div className="flex items-center justify-center gap-1.5 px-4 py-2.5 bg-slate-50/60 border-b border-slate-100 flex-wrap">
+            <span className="text-[10px] text-slate-400 font-medium">Sur vos jours habituels :</span>
             <span className="flex items-center gap-1">
-              <span className="w-4 h-4 rounded-md flex items-center justify-center text-[9px] font-bold"
-                style={{ backgroundColor: STATUS_CONFIG.available.bg, color: STATUS_CONFIG.available.text }}>
+              <span
+                className="w-4 h-4 rounded-md flex items-center justify-center text-[9px] font-bold"
+                style={{
+                  backgroundColor: STATUS_CONFIG.available.bg,
+                  color: STATUS_CONFIG.available.text,
+                }}
+              >
                 ✓
               </span>
-              <span className="text-[10px] font-medium hidden sm:inline" style={{ color: STATUS_CONFIG.available.text }}>
+              <span
+                className="text-[10px] font-medium hidden sm:inline"
+                style={{ color: STATUS_CONFIG.available.text }}
+              >
                 Dispo
               </span>
             </span>
             <span className="text-[10px] text-slate-300">→</span>
-            {/* Préféré */}
             <span className="flex items-center gap-1">
-              <span className="w-4 h-4 rounded-md flex items-center justify-center text-[9px] font-bold"
-                style={{ backgroundColor: STATUS_CONFIG.preferred.bg, color: STATUS_CONFIG.preferred.text }}>
+              <span
+                className="w-4 h-4 rounded-md flex items-center justify-center text-[9px] font-bold"
+                style={{
+                  backgroundColor: STATUS_CONFIG.preferred.bg,
+                  color: STATUS_CONFIG.preferred.text,
+                }}
+              >
                 ★
               </span>
-              <span className="text-[10px] font-medium hidden sm:inline" style={{ color: STATUS_CONFIG.preferred.text }}>
+              <span
+                className="text-[10px] font-medium hidden sm:inline"
+                style={{ color: STATUS_CONFIG.preferred.text }}
+              >
                 Préféré
               </span>
             </span>
             <span className="text-[10px] text-slate-300">→</span>
-            {/* Indisponible */}
             <span className="flex items-center gap-1">
-              <span className="w-4 h-4 rounded-md flex items-center justify-center text-[9px] font-bold"
-                style={{ backgroundColor: STATUS_CONFIG.unavailable.bg, color: STATUS_CONFIG.unavailable.text }}>
+              <span
+                className="w-4 h-4 rounded-md flex items-center justify-center text-[9px] font-bold"
+                style={{
+                  backgroundColor: STATUS_CONFIG.unavailable.bg,
+                  color: STATUS_CONFIG.unavailable.text,
+                }}
+              >
                 ✗
               </span>
-              <span className="text-[10px] font-medium hidden sm:inline" style={{ color: STATUS_CONFIG.unavailable.text }}>
+              <span
+                className="text-[10px] font-medium hidden sm:inline"
+                style={{ color: STATUS_CONFIG.unavailable.text }}
+              >
                 Indispo
               </span>
             </span>
             <span className="text-[10px] text-slate-300">→</span>
-            <span className="text-[10px] text-slate-300 font-medium">Aucun</span>
+            <span className="text-[10px] text-slate-400 font-medium">Dispo</span>
           </div>
         )}
 
@@ -416,54 +491,73 @@ export default function EmployeeAvailabilityPage() {
 
           {days.map((day) => {
             const dateStr = format(day, 'yyyy-MM-dd');
-            const entry = availabilities.get(dateStr);
-            const cfg = entry ? STATUS_CONFIG[entry.status] : null;
+            const stored = availabilities.get(dateStr)?.status;
+            const isWorkDay = isEmployeeWorkDay(day, workDays);
+            const effective = getEffectiveAvailabilityStatus(day, workDays, stored);
+            const cfg = effective ? STATUS_CONFIG[effective] : null;
             const isCurrentDay = isToday(day);
             const isWE = getDay(day) === 0 || getDay(day) === 6;
-            const isPastDay = isPast(parseISO(dateStr)) && dateStr !== format(new Date(), 'yyyy-MM-dd');
+            const isPastDay =
+              isPast(parseISO(dateStr)) && dateStr !== format(new Date(), 'yyyy-MM-dd');
             const isSyncing = syncingDate === dateStr;
-            const isHovered = hoveredDate === dateStr && !isLocked && !isPastDay;
+            const canEdit = isWorkDay && !isPastDay && !isLocked;
+            const isHovered = hoveredDate === dateStr && canEdit;
 
-            // Prochain statut (pour prévisualisation au survol)
-            const nextStatus = getNextStatus(entry?.status);
+            const nextStatus =
+              effective && canEdit
+                ? getNextWorkDayAvailabilityStatus(effective)
+                : null;
             const nextCfg = nextStatus ? STATUS_CONFIG[nextStatus] : null;
 
-            // Couleur de fond : status actuel ou prévisualisation au survol
-            const bgColor = cfg?.bg ?? (isHovered && nextCfg ? nextCfg.bg + '30' : undefined);
+            const bgColor = !isWorkDay
+              ? undefined
+              : cfg?.bg ?? (isHovered && nextCfg ? nextCfg.bg + '30' : undefined);
 
             return (
               <button
                 key={dateStr}
-                onClick={() => handleDayClick(dateStr)}
-                onMouseEnter={() => !isLocked && !isPastDay && setHoveredDate(dateStr)}
+                type="button"
+                onClick={() => void handleDayClick(dateStr, day)}
+                onMouseEnter={() => canEdit && setHoveredDate(dateStr)}
                 onMouseLeave={() => setHoveredDate(null)}
-                disabled={isPastDay || isLocked}
-                className={`h-[72px] border-b border-r border-slate-100 p-1.5 flex flex-col items-center justify-start relative ${
-                  isLocked
-                    ? 'cursor-not-allowed'
+                disabled={!canEdit}
+                title={
+                  !isWorkDay
+                    ? 'Jour hors de vos jours habituels'
                     : isPastDay
-                    ? 'opacity-35 cursor-not-allowed'
+                    ? 'Jour passé'
+                    : undefined
+                }
+                className={`h-[72px] border-b border-r border-slate-100 p-1.5 flex flex-col items-center justify-start relative ${
+                  !isWorkDay
+                    ? 'bg-slate-50/80 cursor-not-allowed opacity-50'
+                    : isLocked || isPastDay
+                    ? 'cursor-not-allowed'
                     : 'cursor-pointer'
-                } ${isSyncing ? 'animate-sync-pulse' : ''}`}
+                } ${isPastDay && isWorkDay ? 'opacity-35' : ''} ${
+                  isSyncing ? 'animate-sync-pulse' : ''
+                }`}
                 style={{
                   backgroundColor: bgColor,
                   transition: 'background-color 0.18s ease',
                 }}
               >
-                {/* Numéro du jour */}
-                <span className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full shrink-0 ${
-                  isCurrentDay
-                    ? 'bg-indigo-600 text-white'
-                    : isWE
-                    ? 'text-slate-400'
-                    : 'text-slate-600'
-                }`}>
+                <span
+                  className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full shrink-0 ${
+                    isCurrentDay
+                      ? 'bg-indigo-600 text-white'
+                      : !isWorkDay
+                      ? 'text-slate-300'
+                      : isWE
+                      ? 'text-slate-400'
+                      : 'text-slate-600'
+                  }`}
+                >
                   {format(day, 'd')}
                 </span>
 
-                {/* Indicateur de statut */}
                 <div className="flex-1 flex items-center justify-center">
-                  {cfg ? (
+                  {isWorkDay && cfg ? (
                     <span
                       className="text-lg font-bold leading-none"
                       style={{ color: cfg.text, transition: 'color 0.18s ease' }}
@@ -471,17 +565,17 @@ export default function EmployeeAvailabilityPage() {
                       {cfg.icon}
                     </span>
                   ) : isHovered && nextCfg ? (
-                    /* Prévisualisation du prochain statut au survol */
                     <span
                       className="text-base font-bold leading-none opacity-40"
                       style={{ color: nextCfg.text }}
                     >
                       {nextCfg.icon}
                     </span>
+                  ) : !isWorkDay ? (
+                    <span className="text-[10px] text-slate-300">—</span>
                   ) : null}
                 </div>
 
-                {/* Anneau de sync discret */}
                 {isSyncing && (
                   <span className="absolute inset-0 rounded-none ring-2 ring-inset ring-indigo-400/40 pointer-events-none" />
                 )}
@@ -505,7 +599,9 @@ export default function EmployeeAvailabilityPage() {
       <p className="text-xs text-slate-400 text-center pb-2">
         {isLocked
           ? 'Ce mois est verrouillé. Demandez une modification à votre responsable.'
-          : 'à valider avant le début du mois.'}
+          : workDays.length > 0
+          ? 'Modifiez uniquement vos jours habituels, puis validez avant le début du mois.'
+          : 'En attente de configuration de vos jours habituels par votre responsable.'}
       </p>
 
       {/* ── Modal confirmation validation ────────────────────── */}
@@ -519,7 +615,8 @@ export default function EmployeeAvailabilityPage() {
             <p className="text-sm text-slate-500 text-center leading-relaxed mb-6">
               Vos disponibilités pour{' '}
               <strong className="text-slate-700">{format(currentDate, 'MMMM yyyy', { locale: fr })}</strong>{' '}
-              seront verrouillées. Pour les modifier ensuite, il faudra en faire la demande.
+              seront verrouillées ({workDaysSummary || 'jours habituels'}).
+              Pour les modifier ensuite, il faudra en faire la demande.
             </p>
             <div className="flex gap-3">
               <button

@@ -6,10 +6,18 @@
 
 import { create } from 'zustand';
 import toast from 'react-hot-toast';
-import { Employee, Shift, ScheduleEntry, AppSettings, PlanningAlert, EmployeeGroup } from './types';
+import { Employee, Shift, ScheduleEntry, AppSettings, PlanningAlert } from './types';
 import { defaultSettings } from '@/data/mock';
-import { buildPlanningAlerts, getAvailabilityFetchRange, getEntryDurationHours } from './utils';
+import {
+  buildPlanningAlerts,
+  getAvailabilityFetchRange,
+  getPlannedEntryDurationHours,
+  getValidatedEntryDurationHours,
+  mergeAvailabilityWindowIntoMap,
+  availabilityMapKey,
+} from './utils';
 import { db } from '@/lib/supabase/db';
+import { createClient } from '@/lib/supabase/client';
 import { supabaseErrorMessage } from '@/lib/supabase/errorMessage';
 import { format, startOfWeek, endOfWeek } from 'date-fns';
 
@@ -20,21 +28,17 @@ interface PlanningStore {
   scheduleEntries: ScheduleEntry[];
   settings: AppSettings;
   alerts: PlanningAlert[];
-  lockedMonths: string[];
-  groups: EmployeeGroup[];
   isLoading: boolean;
+  /** Statut dispo employé par cellule : clé `availabilityMapKey(employeeId, date)` → `available` | `preferred` | `unavailable` */
+  availabilityStatusByKey: Record<string, string>;
 
   // ---- Vue planning ----
   currentDate: string;
 
   // ---- Chargement depuis Supabase ----
   loadData: () => Promise<void>;
-
-  // ---- Actions Groupes ----
-  addGroup: (name: string) => void;
-  updateGroup: (id: string, name: string) => void;
-  deleteGroup: (id: string) => void;
-  setGroupMembers: (groupId: string, memberIds: string[]) => void;
+  /** Charge / fusionne les disponibilités pour une plage de dates (vues planning). */
+  mergeAvailabilityRequests: (dateFrom: string, dateTo: string) => Promise<void>;
 
   // ---- Actions Employés ----
   addEmployee: (employee: Omit<Employee, 'id' | 'createdAt'>) => void;
@@ -50,16 +54,18 @@ interface PlanningStore {
   // ---- Actions Planning ----
   assignShift: (employeeId: string, date: string, shiftId: string, note?: string) => void;
   removeShift: (employeeId: string, date: string) => void;
+  /** Met à jour les heures réelles validées (planning réel + sync pointage approuvé). */
+  updateValidatedTimes: (
+    employeeId: string,
+    date: string,
+    validatedStart: string,
+    validatedEnd: string
+  ) => Promise<void>;
   copyWeek: (sourceWeekStart: string, targetWeekStart: string) => void;
   setCurrentDate: (date: string) => void;
 
   // ---- Settings ----
   updateSettings: (updates: Partial<AppSettings>) => Promise<void>;
-
-  // ---- Validation des mois ----
-  validateMonth: (monthKey: string) => void;
-  unlockMonth: (monthKey: string) => void;
-  isMonthLocked: (monthKey: string) => boolean;
 
   /** Publie le planning du mois : les employés voient les créneaux de cette plage. */
   publishMonthForEmployees: (monthKey: string) => Promise<void>;
@@ -78,6 +84,9 @@ interface PlanningStore {
   getActiveShifts: () => Shift[];
   getWeeklyHours: (employeeId: string, weekStart: string, weekEnd: string) => number;
   getMonthlyHours: (employeeId: string, monthStart: string, monthEnd: string) => number;
+  getValidatedWeeklyHours: (employeeId: string, weekStart: string, weekEnd: string) => number;
+  getValidatedMonthlyHours: (employeeId: string, monthStart: string, monthEnd: string) => number;
+  getAvailabilityStatus: (employeeId: string, date: string) => string | undefined;
 }
 
 export const usePlanningStore = create<PlanningStore>((set, get) => ({
@@ -87,22 +96,19 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
   scheduleEntries: [],
   settings: defaultSettings,
   alerts: [],
-  lockedMonths: [],
-  groups: [],
   isLoading: true,
   currentDate: format(new Date(), 'yyyy-MM-dd'),
+  availabilityStatusByKey: {},
 
   // ---- Chargement depuis Supabase ─────────────────────────
   loadData: async () => {
     set({ isLoading: true });
     try {
-      const [employees, shifts, entries, settings, lockedMonths, groups] = await Promise.all([
+      const [employees, shifts, entries, settings] = await Promise.all([
         db.getEmployees(),
         db.getShifts(),
         db.getScheduleEntries(),
         db.getSettings(),
-        db.getLockedMonths(),
-        db.getGroups().catch(() => [] as EmployeeGroup[]),
       ]);
 
       const today = new Date();
@@ -111,6 +117,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       const { rangeFrom, rangeTo } = getAvailabilityFetchRange(entries, today);
 
       let alerts: PlanningAlert[] = [];
+      let availabilityStatusByKey = get().availabilityStatusByKey;
       try {
         const [requests, validations] = await Promise.all([
           db.getAvailabilityRequestsInRange(rangeFrom, rangeTo),
@@ -125,6 +132,12 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
           requests,
           validations
         );
+        availabilityStatusByKey = mergeAvailabilityWindowIntoMap(
+          get().availabilityStatusByKey,
+          rangeFrom,
+          rangeTo,
+          requests
+        );
       } catch (err) {
         console.error('loadData : disponibilités / validations (alertes partielles)', err);
         alerts = buildPlanningAlerts(employees, shifts, entries, weekStart, weekEnd, [], []);
@@ -135,9 +148,8 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         shifts,
         scheduleEntries: entries,
         settings: settings ?? defaultSettings,
-        lockedMonths,
-        groups,
         alerts,
+        availabilityStatusByKey,
         isLoading: false,
       });
     } catch (error) {
@@ -146,37 +158,20 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     }
   },
 
-  // ---- Groupes ────────────────────────────────────────────
-  addGroup: (name) => {
-    const newGroup: EmployeeGroup = {
-      id: crypto.randomUUID(),
-      name,
-      memberIds: [],
-      createdAt: format(new Date(), 'yyyy-MM-dd'),
-    };
-    set((state) => ({ groups: [...state.groups, newGroup] }));
-    db.upsertGroup({ id: newGroup.id, name: newGroup.name }).catch(console.error);
-  },
-
-  updateGroup: (id, name) => {
-    set((state) => ({
-      groups: state.groups.map((g) => (g.id === id ? { ...g, name } : g)),
-    }));
-    db.upsertGroup({ id, name }).catch(console.error);
-  },
-
-  deleteGroup: (id) => {
-    set((state) => ({ groups: state.groups.filter((g) => g.id !== id) }));
-    db.deleteGroup(id).catch(console.error);
-  },
-
-  setGroupMembers: (groupId, memberIds) => {
-    set((state) => ({
-      groups: state.groups.map((g) =>
-        g.id === groupId ? { ...g, memberIds } : g
-      ),
-    }));
-    db.setGroupMembers(groupId, memberIds).catch(console.error);
+  mergeAvailabilityRequests: async (dateFrom, dateTo) => {
+    try {
+      const rows = await db.getAvailabilityRequestsInRange(dateFrom, dateTo);
+      set((state) => ({
+        availabilityStatusByKey: mergeAvailabilityWindowIntoMap(
+          state.availabilityStatusByKey,
+          dateFrom,
+          dateTo,
+          rows
+        ),
+      }));
+    } catch (err) {
+      console.error('mergeAvailabilityRequests : lecture disponibilités (fenêtre planning)', err);
+    }
   },
 
   // ---- Employés ───────────────────────────────────────────
@@ -310,6 +305,46 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     void get().refreshAlerts();
   },
 
+  updateValidatedTimes: async (employeeId, date, validatedStart, validatedEnd) => {
+    const entry = get().scheduleEntries.find(
+      (e) => e.employeeId === employeeId && e.date === date
+    );
+    if (!entry) {
+      toast.error('Aucune entrée planning pour ce jour.');
+      return;
+    }
+    const updated: ScheduleEntry = {
+      ...entry,
+      validatedStart,
+      validatedEnd,
+      isModified: true,
+    };
+    set((state) => ({
+      scheduleEntries: state.scheduleEntries.map((e) =>
+        e.employeeId === employeeId && e.date === date ? updated : e
+      ),
+    }));
+    try {
+      await db.upsertEntry(updated);
+      const supabase = createClient();
+      await supabase
+        .from('time_declarations')
+        .update({
+          actual_start: validatedStart,
+          actual_end: validatedEnd,
+          reviewed_at: new Date().toISOString(),
+        })
+        .eq('employee_id', employeeId)
+        .eq('date', date)
+        .eq('status', 'approved');
+      toast.success('Heures réelles mises à jour');
+    } catch (err) {
+      console.error(err);
+      toast.error('Erreur lors de la mise à jour des heures réelles');
+      void get().loadData();
+    }
+  },
+
   copyWeek: (sourceWeekStart, targetWeekStart) => {
     const { scheduleEntries } = get();
     const sourceEnd = format(
@@ -376,27 +411,6 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     }
   },
 
-  // ---- Validation des mois ────────────────────────────────
-  validateMonth: (monthKey) => {
-    set((state) => ({
-      lockedMonths: state.lockedMonths.includes(monthKey)
-        ? state.lockedMonths
-        : [...state.lockedMonths, monthKey],
-    }));
-    db.lockMonth(monthKey).catch(console.error);
-  },
-
-  unlockMonth: (monthKey) => {
-    set((state) => ({
-      lockedMonths: state.lockedMonths.filter((m) => m !== monthKey),
-    }));
-    db.unlockMonth(monthKey).catch(console.error);
-  },
-
-  isMonthLocked: (monthKey) => {
-    return get().lockedMonths.includes(monthKey);
-  },
-
   publishMonthForEmployees: async (monthKey) => {
     await db.publishMonthEntries(monthKey);
     const scheduleEntries = await db.getScheduleEntries();
@@ -418,6 +432,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     const { rangeFrom, rangeTo } = getAvailabilityFetchRange(scheduleEntries, today);
 
     let alerts: PlanningAlert[] = [];
+    let availabilityStatusByKey = get().availabilityStatusByKey;
     try {
       const [requests, validations] = await Promise.all([
         db.getAvailabilityRequestsInRange(rangeFrom, rangeTo),
@@ -432,12 +447,18 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         requests,
         validations
       );
+      availabilityStatusByKey = mergeAvailabilityWindowIntoMap(
+        get().availabilityStatusByKey,
+        rangeFrom,
+        rangeTo,
+        requests
+      );
     } catch (err) {
       console.error('refreshAlerts : lecture disponibilités / validations', err);
       alerts = buildPlanningAlerts(employees, shifts, scheduleEntries, weekStart, weekEnd, [], []);
     }
 
-    set({ alerts });
+    set({ alerts, availabilityStatusByKey });
   },
 
   resolveAlert: (alertId) => {
@@ -483,7 +504,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       )
       .reduce((total, entry) => {
         const shift = shiftMap.get(entry.shiftId);
-        return total + getEntryDurationHours(entry, shift);
+        return total + getPlannedEntryDurationHours(entry, shift);
       }, 0);
   },
 
@@ -499,7 +520,34 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       )
       .reduce((total, entry) => {
         const shift = shiftMap.get(entry.shiftId);
-        return total + getEntryDurationHours(entry, shift);
+        return total + getPlannedEntryDurationHours(entry, shift);
       }, 0);
   },
+
+  getValidatedWeeklyHours: (employeeId, weekStart, weekEnd) => {
+    const { scheduleEntries } = get();
+    return scheduleEntries
+      .filter(
+        (e) =>
+          e.employeeId === employeeId &&
+          e.date >= weekStart &&
+          e.date <= weekEnd
+      )
+      .reduce((total, entry) => total + getValidatedEntryDurationHours(entry), 0);
+  },
+
+  getValidatedMonthlyHours: (employeeId, monthStart, monthEnd) => {
+    const { scheduleEntries } = get();
+    return scheduleEntries
+      .filter(
+        (e) =>
+          e.employeeId === employeeId &&
+          e.date >= monthStart &&
+          e.date <= monthEnd
+      )
+      .reduce((total, entry) => total + getValidatedEntryDurationHours(entry), 0);
+  },
+
+  getAvailabilityStatus: (employeeId, date) =>
+    get().availabilityStatusByKey[availabilityMapKey(employeeId, date)],
 }));

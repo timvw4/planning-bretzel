@@ -64,18 +64,21 @@ export default function AvailabilityAdminPage() {
     const start = format(startOfMonth(currentDate), 'yyyy-MM-dd');
     const end = format(endOfMonth(currentDate), 'yyyy-MM-dd');
 
-    const [{ data: emps }, { data: avails }, { data: validations }, { data: requests }] = await Promise.all([
+    const [{ data: emps }, { data: avails }, { data: validations }, { data: pendingReqs }] =
+      await Promise.all([
       supabase.from('employees').select('id, first_name, last_name, color').eq('is_active', true).order('first_name'),
       supabase.from('availability_requests').select('employee_id, date, status').gte('date', start).lte('date', end),
       supabase.from('availability_validations').select('employee_id').eq('month_key', monthKey),
+      // Toutes les demandes en attente (tous mois) — aligné avec la pastille du menu
       supabase.from('availability_unlock_requests').select('id, employee_id, month_key, reason, status, requested_at')
-        .eq('month_key', monthKey).order('requested_at', { ascending: false }),
+        .eq('status', 'pending')
+        .order('requested_at', { ascending: false }),
     ]);
 
     setEmployees((emps ?? []).map((e) => ({ id: e.id, firstName: e.first_name, lastName: e.last_name ?? '', color: e.color })));
     setAvailabilities((avails ?? []).map((a) => ({ employeeId: a.employee_id, date: a.date, status: a.status as AvailabilityStatus })));
     setValidatedEmployeeIds(new Set((validations ?? []).map((v) => v.employee_id)));
-    setUnlockRequests((requests ?? []).map((r) => ({
+    setUnlockRequests((pendingReqs ?? []).map((r) => ({
       id: r.id, employeeId: r.employee_id, monthKey: r.month_key,
       reason: r.reason, status: r.status as UnlockRequest['status'],
       requestedAt: r.requested_at,
@@ -128,6 +131,11 @@ export default function AvailabilityAdminPage() {
   const totalAvailable = availabilities.filter((a) => a.status === 'available').length;
   const totalUnavailable = availabilities.filter((a) => a.status === 'unavailable').length;
   const pendingRequests = unlockRequests.filter((r) => r.status === 'pending');
+
+  const goToRequestMonth = (requestMonthKey: string) => {
+    const [y, m] = requestMonthKey.split('-').map(Number);
+    if (y && m) setCurrentDate(new Date(y, m - 1, 1));
+  };
 
   const filteredEmployees = filterStatus === 'all'
     ? employees
@@ -336,16 +344,18 @@ export default function AvailabilityAdminPage() {
         {/* Vue demandes */}
         {activeTab === 'requests' && (
           <div className="space-y-3">
-            {unlockRequests.length === 0 ? (
+            {pendingRequests.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-100 p-12 text-center">
                 <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-3">
                   <Check className="w-6 h-6 text-slate-400" />
                 </div>
-                <p className="text-sm font-semibold text-slate-600">Aucune demande pour ce mois</p>
-                <p className="text-xs text-slate-400 mt-1">Les demandes de modification apparaîtront ici.</p>
+                <p className="text-sm font-semibold text-slate-600">Aucune demande en attente</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Les demandes de déverrouillage apparaissent ici, quel que soit le mois concerné.
+                </p>
               </div>
             ) : (
-              unlockRequests.map((req) => {
+              pendingRequests.map((req) => {
                 const emp = employees.find((e) => e.id === req.employeeId);
                 return (
                   <div key={req.id}
@@ -387,6 +397,18 @@ export default function AvailabilityAdminPage() {
                       <p className="text-[11px] text-slate-400 mt-2">
                         Envoyée le {format(new Date(req.requestedAt), 'd MMM yyyy à HH:mm', { locale: fr })}
                       </p>
+                      {req.monthKey !== monthKey && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            goToRequestMonth(req.monthKey);
+                            setActiveTab('calendar');
+                          }}
+                          className="mt-2 text-[11px] font-semibold text-indigo-600 hover:text-indigo-700"
+                        >
+                          Afficher ce mois dans le calendrier →
+                        </button>
+                      )}
                     </div>
 
                     {/* Actions (uniquement si pending) */}

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ChevronLeft,
   ChevronRight,
@@ -11,10 +12,10 @@ import {
   Download,
   Info,
   Eraser,
-  Lock,
   Send,
-  UsersRound,
+  Filter,
   ChevronDown,
+  CalendarDays,
 } from 'lucide-react';
 import {
   format,
@@ -44,8 +45,18 @@ import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
-import { formatDate, formatHours, getInitials, calcPickerPosition, getEntryDisplayTimeRange, calculateShiftDuration, getEntryDurationHours } from '@/lib/utils';
-import { Employee, PlanningAlert } from '@/lib/types';
+import {
+  formatDate,
+  formatHours,
+  getInitials,
+  calcPickerPosition,
+  getPlannedShiftTimeRange,
+  getPlannedEntryDurationHours,
+  calculateShiftDuration,
+  availabilityStatusDisplay,
+  availabilityMapKey,
+} from '@/lib/utils';
+import { getPositionLabel } from '@/lib/employeePosition';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -56,6 +67,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 export default function WeeklyPlanningPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const dateParam = searchParams.get('date');
+
   const {
     employees,
     shifts,
@@ -66,10 +81,10 @@ export default function WeeklyPlanningPage() {
     copyWeek,
     alerts,
     resolveAlert,
-    isMonthLocked,
     settings,
     publishWeekForEmployees,
-    groups,
+    availabilityStatusByKey,
+    mergeAvailabilityRequests,
   } = usePlanningStore(
     useShallow((s) => ({
       employees: s.employees,
@@ -81,10 +96,10 @@ export default function WeeklyPlanningPage() {
       copyWeek: s.copyWeek,
       alerts: s.alerts,
       resolveAlert: s.resolveAlert,
-      isMonthLocked: s.isMonthLocked,
       settings: s.settings,
       publishWeekForEmployees: s.publishWeekForEmployees,
-      groups: s.groups,
+      availabilityStatusByKey: s.availabilityStatusByKey,
+      mergeAvailabilityRequests: s.mergeAvailabilityRequests,
     }))
   );
 
@@ -97,8 +112,9 @@ export default function WeeklyPlanningPage() {
   const [eraseMode, setEraseMode] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishSubmitting, setPublishSubmitting] = useState(false);
-  /** Groupe sélectionné pour filtrer (null = tous les groupes) */
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  /** 'all' = tous les employés actifs ; 'subset' = liste dans selectedEmployeeIds */
+  const [employeeFilterMode, setEmployeeFilterMode] = useState<'all' | 'subset'>('all');
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const pickerRef = useRef<HTMLDivElement>(null);
 
   const weekStart = startOfWeek(currentWeekDate, { weekStartsOn: 1 });
@@ -106,60 +122,130 @@ export default function WeeklyPlanningPage() {
   const weekDays = eachDayOfInterval({ start: weekStart, end: weekEnd });
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(weekEnd, 'yyyy-MM-dd');
-  // Une semaine peut chevaucher deux mois : la semaine est verrouillée si son lundi appartient à un mois verrouillé
   const weekMonthKey = format(weekStart, 'yyyy-MM');
-  const isLocked = isMonthLocked(weekMonthKey);
 
-  const activeEmployees = employees.filter(
-    (e) => e.isActive && !(e.inactiveMonths ?? []).includes(weekMonthKey)
+  useEffect(() => {
+    if (!dateParam) return;
+    const parsed = parseISO(dateParam);
+    if (!Number.isNaN(parsed.getTime())) setCurrentWeekDate(parsed);
+  }, [dateParam]);
+
+  const activeEmployees = useMemo(
+    () =>
+      employees.filter(
+        (e) => e.isActive && !(e.inactiveMonths ?? []).includes(weekMonthKey)
+      ),
+    [employees, weekMonthKey]
   );
 
-  const displayedEmployees = selectedGroupId
-    ? (() => {
-        const grp = groups.find((g) => g.id === selectedGroupId);
-        if (!grp) return activeEmployees;
-        const memberSet = new Set(grp.memberIds);
-        return activeEmployees.filter((e) => memberSet.has(e.id));
-      })()
-    : activeEmployees;
+  const employeesForFilterMenu = useMemo(
+    () =>
+      [...activeEmployees].sort((a, b) =>
+        a.firstName.localeCompare(b.firstName, 'fr', { sensitivity: 'base' })
+      ),
+    [activeEmployees]
+  );
 
-  /** Lignes du tableau : séparateurs de groupe + lignes employé */
-  const groupedRows = (() => {
-    type SepRow = { type: 'separator'; groupName: string };
-    type EmpRow = { type: 'employee'; employee: Employee; idx: number };
-    const rows: (SepRow | EmpRow)[] = [];
+  const displayedEmployees = useMemo(() => {
+    if (employeeFilterMode === 'all') return activeEmployees;
+    return activeEmployees.filter((e) => new Set(selectedEmployeeIds).has(e.id));
+  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
 
-    if (selectedGroupId !== null || groups.length === 0) {
-      displayedEmployees.forEach((e, i) => rows.push({ type: 'employee', employee: e, idx: i }));
-      return rows;
+  const filterSummaryTitle = useMemo(() => {
+    const list =
+      employeeFilterMode === 'all'
+        ? activeEmployees
+        : activeEmployees.filter((e) => selectedEmployeeIds.includes(e.id));
+    return list
+      .map((e) => `${e.firstName}${e.lastName ? ` ${e.lastName}` : ''}`.trim())
+      .join(', ');
+  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
+
+  const filterSummaryLabel = useMemo(() => {
+    const n = activeEmployees.length;
+    if (n === 0) return 'Aucun employé actif';
+    if (employeeFilterMode === 'all') return `Tous les employés (${n})`;
+    const k = selectedEmployeeIds.length;
+    if (k === 0) return 'Aucun employé';
+    if (k === 1) {
+      const e = activeEmployees.find((x) => x.id === selectedEmployeeIds[0]);
+      return e
+        ? `${e.firstName}${e.lastName ? ` ${e.lastName}` : ''}`.trim()
+        : '1 employé';
     }
+    return `${k} employés`;
+  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
 
-    const assignedIds = new Set<string>();
-    let empIdx = 0;
-    for (const grp of groups) {
-      const members = displayedEmployees.filter((e) => grp.memberIds.includes(e.id));
-      if (members.length === 0) continue;
-      rows.push({ type: 'separator', groupName: grp.name });
-      for (const emp of members) {
-        rows.push({ type: 'employee', employee: emp, idx: empIdx++ });
-        assignedIds.add(emp.id);
+  const unifiedFilterTitle = filterSummaryTitle || filterSummaryLabel;
+
+  const hasActiveFilters = employeeFilterMode === 'subset';
+
+  const areAllEmployeesSelected =
+    employeeFilterMode === 'all' ||
+    (activeEmployees.length > 0 &&
+      activeEmployees.every((e) => selectedEmployeeIds.includes(e.id)));
+
+  const isEmployeeRowChecked = (id: string) =>
+    areAllEmployeesSelected || selectedEmployeeIds.includes(id);
+
+  const handleToggleAllEmployees = () => {
+    if (areAllEmployeesSelected) {
+      setEmployeeFilterMode('subset');
+      setSelectedEmployeeIds([]);
+    } else {
+      setEmployeeFilterMode('all');
+      setSelectedEmployeeIds([]);
+    }
+  };
+
+  const handleToggleOneEmployee = (id: string, checked: boolean) => {
+    if (areAllEmployeesSelected) {
+      if (!checked) {
+        setEmployeeFilterMode('subset');
+        setSelectedEmployeeIds(activeEmployees.map((e) => e.id).filter((x) => x !== id));
       }
+      return;
     }
-    const ungrouped = displayedEmployees.filter((e) => !assignedIds.has(e.id));
-    if (ungrouped.length > 0) {
-      if (rows.length > 0) rows.push({ type: 'separator', groupName: 'Sans groupe' });
-      for (const emp of ungrouped) {
-        rows.push({ type: 'employee', employee: emp, idx: empIdx++ });
+    if (checked) {
+      const next = Array.from(new Set([...selectedEmployeeIds, id]));
+      if (next.length === activeEmployees.length) {
+        setEmployeeFilterMode('all');
+        setSelectedEmployeeIds([]);
+      } else {
+        setSelectedEmployeeIds(next);
       }
+    } else {
+      setEmployeeFilterMode('subset');
+      setSelectedEmployeeIds(selectedEmployeeIds.filter((x) => x !== id));
     }
-    return rows;
-  })();
+  };
 
   const shiftMap = new Map(shifts.map((s) => [s.id, s]));
 
   // ── Map des jours fériés : "yyyy-MM-dd" -> nom ───────────────
   const holidayMap = new Map((settings.holidays ?? []).map((h) => [h.date, h.name]));
   const activeAlerts = alerts.filter((a) => !a.resolved);
+
+  useEffect(() => {
+    void mergeAvailabilityRequests(weekStartStr, weekEndStr);
+  }, [weekStartStr, weekEndStr, mergeAvailabilityRequests]);
+
+  useEffect(() => {
+    if (employeeFilterMode !== 'subset') return;
+    const valid = new Set(activeEmployees.map((e) => e.id));
+    setSelectedEmployeeIds((prev) => {
+      const pruned = prev.filter((id) => valid.has(id));
+      if (
+        pruned.length === activeEmployees.length &&
+        activeEmployees.length > 0 &&
+        activeEmployees.every((e) => pruned.includes(e.id))
+      ) {
+        queueMicrotask(() => setEmployeeFilterMode('all'));
+        return [];
+      }
+      return pruned;
+    });
+  }, [activeEmployees, weekMonthKey, employeeFilterMode]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -190,9 +276,6 @@ export default function WeeklyPlanningPage() {
     (empId: string, date: string, e: React.MouseEvent) => {
       e.stopPropagation();
 
-      // Semaine verrouillée : lecture seule
-      if (isLocked) return;
-
       // Mode gomme : effacement direct
       if (eraseMode) {
         removeShift(empId, date);
@@ -222,7 +305,7 @@ export default function WeeklyPlanningPage() {
         setPickerPos(calcPickerPosition(rect));
       }
     },
-    [activeCell, brushShiftId, eraseMode, isLocked, scheduleEntries, assignShift, removeShift]
+    [activeCell, brushShiftId, eraseMode, scheduleEntries, assignShift, removeShift]
   );
 
   const handleBrushSelect = (shiftId: string) => {
@@ -303,61 +386,65 @@ export default function WeeklyPlanningPage() {
   return (
     <div className="animate-fade-in flex flex-col h-screen">
       <Header
-        title="Planning hebdomadaire"
-        subtitle={`Semaine du ${formatDate(weekStartStr)} au ${formatDate(weekEndStr)}`}
+        title="Planning prévu"
         actions={
           <div className="flex items-center gap-2">
-            {/* Filtre par groupe */}
-            {groups.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-9 min-w-[9rem] max-w-[min(100%,14rem)] justify-between gap-2 font-normal px-3"
+            {/* Filtre employés + groupes */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 min-w-[7rem] justify-between gap-2 font-normal px-3"
+                  title={unifiedFilterTitle || undefined}
+                  disabled={activeEmployees.length === 0}
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <Filter className="h-4 w-4 shrink-0 text-slate-500" />
+                    <span className="text-sm text-slate-700">Filtre</span>
+                    {hasActiveFilters && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" aria-hidden />
+                    )}
+                  </span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80 max-h-[min(24rem,70vh)] overflow-y-auto">
+                <DropdownMenuLabel className="text-xs font-semibold text-slate-500">
+                  Employés affichés
+                </DropdownMenuLabel>
+                <DropdownMenuCheckboxItem
+                  checked={areAllEmployeesSelected}
+                  onCheckedChange={handleToggleAllEmployees}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  Tous les employés ({activeEmployees.length})
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                {employeesForFilterMenu.map((e) => (
+                  <DropdownMenuCheckboxItem
+                    key={e.id}
+                    checked={isEmployeeRowChecked(e.id)}
+                    onCheckedChange={(c) => handleToggleOneEmployee(e.id, c === true)}
+                    onSelect={(ev) => ev.preventDefault()}
                   >
-                    <span className="flex items-center gap-2 min-w-0">
-                      <UsersRound className="h-4 w-4 shrink-0 text-slate-500" />
-                      <span className="truncate text-left text-sm text-slate-700">
-                        {selectedGroupId
-                          ? (groups.find((g) => g.id === selectedGroupId)?.name ?? 'Groupe')
-                          : 'Tous les groupes'}
+                    <span className="flex items-center gap-2 min-w-0 flex-1">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0 ring-1 ring-black/5"
+                        style={{ backgroundColor: e.color }}
+                      />
+                      <span className="truncate">
+                        {e.firstName}
+                        {e.lastName ? ` ${e.lastName}` : ''}
+                      </span>
+                      <span className="text-[10px] text-slate-400 ml-auto shrink-0 tabular-nums">
+                        {getInitials(e.firstName, e.lastName)}
                       </span>
                     </span>
-                    <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel className="text-xs font-semibold text-slate-500">
-                    Filtrer par groupe
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuCheckboxItem
-                    checked={selectedGroupId === null}
-                    onCheckedChange={() => setSelectedGroupId(null)}
-                    onSelect={(e) => e.preventDefault()}
-                  >
-                    Tous les groupes
                   </DropdownMenuCheckboxItem>
-                  <DropdownMenuSeparator />
-                  {groups.map((g) => (
-                    <DropdownMenuCheckboxItem
-                      key={g.id}
-                      checked={selectedGroupId === g.id}
-                      onCheckedChange={() => setSelectedGroupId(g.id)}
-                      onSelect={(e) => e.preventDefault()}
-                    >
-                      <span className="flex items-center justify-between w-full gap-2">
-                        <span>{g.name}</span>
-                        <span className="text-[10px] text-slate-400 shrink-0">
-                          {g.memberIds.length} membre{g.memberIds.length > 1 ? 's' : ''}
-                        </span>
-                      </span>
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             {activeAlerts.length > 0 && (
               <button
@@ -389,18 +476,20 @@ export default function WeeklyPlanningPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Envoyer la semaine aux employés ?</DialogTitle>
-            <DialogDescription className="text-sm text-slate-600 space-y-2 pt-1">
-              <p>
-                Tous les créneaux du{' '}
-                <strong>
-                  {format(weekStart, 'd MMM', { locale: fr })} au {format(weekEnd, 'd MMM yyyy', { locale: fr })}
-                </strong>{' '}
-                deviennent visibles sur le compte employé.
-              </p>
-              <p className="text-xs text-slate-500">
-                Les shifts en brouillon (cadre en pointillés) seront inclus. Les employés ne voient que les jours
-                publiés ; vous pouvez envoyer mois par mois ou semaine par semaine selon votre usage.
-              </p>
+            <DialogDescription asChild>
+              <div className="text-sm text-slate-600 space-y-2 pt-1">
+                <p>
+                  Tous les créneaux du{' '}
+                  <strong>
+                    {format(weekStart, 'd MMM', { locale: fr })} au {format(weekEnd, 'd MMM yyyy', { locale: fr })}
+                  </strong>{' '}
+                  deviennent visibles sur le compte employé.
+                </p>
+                <p className="text-xs text-slate-500">
+                  Les shifts en brouillon (cadre en pointillés) seront inclus. Les employés ne voient que les jours
+                  publiés ; vous pouvez envoyer mois par mois ou semaine par semaine selon votre usage.
+                </p>
+              </div>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">
@@ -503,6 +592,17 @@ export default function WeeklyPlanningPage() {
             >
               <RotateCcw className="h-3.5 w-3.5" />
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                router.push(`/planning/monthly?date=${format(weekStart, 'yyyy-MM-dd')}`)
+              }
+              className="text-xs ml-1 sm:ml-2 gap-1.5"
+            >
+              <CalendarDays className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Vue mensuelle</span>
+            </Button>
           </div>
           <div className="text-right">
             <p className="text-[10px] text-slate-400 uppercase tracking-wide hidden sm:block">Total semaine</p>
@@ -519,78 +619,57 @@ export default function WeeklyPlanningPage() {
           })}`}
         />
 
-        {/* Ligne 2 : légende shifts + pinceau + gomme (ou badge verrouillé) */}
+        {/* Ligne 2 : légende shifts + pinceau + gomme */}
         <div className="flex items-center gap-2 px-6 pb-3 flex-wrap">
-          {isLocked ? (
-            <>
-              <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-3 py-1.5 shrink-0">
-                <Lock className="h-3.5 w-3.5" />
-                <span className="text-[11px] font-semibold">Semaine validée — lecture seule</span>
-              </div>
-              <div className="h-4 w-px bg-slate-200 mx-1 shrink-0" />
-              {shifts.filter((s) => s.isActive).map((shift) => (
-                <span
-                  key={shift.id}
-                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap opacity-60"
-                  style={{ backgroundColor: shift.color, color: shift.textColor }}
-                >
-                  {shift.shortName}
-                </span>
-              ))}
-            </>
-          ) : (
-            <>
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mr-1 shrink-0">
-                Sélectionner :
-              </span>
-              {shifts.filter((s) => s.isActive).map((shift) => {
-                const isActive = brushShiftId === shift.id;
-                return (
-                  <button
-                    key={shift.id}
-                    onClick={() => handleBrushSelect(shift.id)}
-                    title={`Peindre "${shift.name}"`}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all duration-150 ${
-                      isActive
-                        ? 'ring-2 ring-offset-1 ring-slate-700 scale-110 shadow-md'
-                        : 'hover:scale-105 hover:shadow-sm opacity-75 hover:opacity-100'
-                    }`}
-                    style={{ backgroundColor: shift.color, color: shift.textColor }}
-                  >
-                    {shift.shortName}
-                  </button>
-                );
-              })}
-              <div className="h-4 w-px bg-slate-200 mx-1 shrink-0" />
+          <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mr-1 shrink-0">
+            Sélectionner :
+          </span>
+          {shifts.filter((s) => s.isActive).map((shift) => {
+            const isActive = brushShiftId === shift.id;
+            return (
               <button
-                onClick={handleEraseToggle}
-                title="Effacer des shifts en cliquant sur les cases"
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all duration-150 border shrink-0 ${
-                  eraseMode
-                    ? 'bg-red-500 text-white border-red-500 ring-2 ring-offset-1 ring-red-500 scale-110 shadow-md'
-                    : 'bg-white text-slate-500 border-slate-200 hover:border-red-300 hover:text-red-500 hover:scale-105'
+                key={shift.id}
+                onClick={() => handleBrushSelect(shift.id)}
+                title={`Peindre "${shift.name}"`}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all duration-150 ${
+                  isActive
+                    ? 'ring-2 ring-offset-1 ring-slate-700 scale-110 shadow-md'
+                    : 'hover:scale-105 hover:shadow-sm opacity-75 hover:opacity-100'
                 }`}
+                style={{ backgroundColor: shift.color, color: shift.textColor }}
               >
-                <Eraser className="h-3 w-3" />
-                Effacer
+                {shift.shortName}
               </button>
-              {(brushShiftId || eraseMode) && (
-                <span className={`ml-2 text-[10px] font-semibold border rounded-lg px-2 py-1 flex items-center gap-1 shrink-0 ${
-                  eraseMode
-                    ? 'text-red-600 bg-red-50 border-red-200'
-                    : 'text-indigo-600 bg-indigo-50 border-indigo-200'
-                }`}>
-                  {eraseMode ? '🧹 Gomme active' : '🖌 Pinceau actif'} — Échap pour quitter
-                </span>
-              )}
-            </>
+            );
+          })}
+          <div className="h-4 w-px bg-slate-200 mx-1 shrink-0" />
+          <button
+            onClick={handleEraseToggle}
+            title="Effacer des shifts en cliquant sur les cases"
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all duration-150 border shrink-0 ${
+              eraseMode
+                ? 'bg-red-500 text-white border-red-500 ring-2 ring-offset-1 ring-red-500 scale-110 shadow-md'
+                : 'bg-white text-slate-500 border-slate-200 hover:border-red-300 hover:text-red-500 hover:scale-105'
+            }`}
+          >
+            <Eraser className="h-3 w-3" />
+            Effacer
+          </button>
+          {(brushShiftId || eraseMode) && (
+            <span className={`ml-2 text-[10px] font-semibold border rounded-lg px-2 py-1 flex items-center gap-1 shrink-0 ${
+              eraseMode
+                ? 'text-red-600 bg-red-50 border-red-200'
+                : 'text-indigo-600 bg-indigo-50 border-indigo-200'
+            }`}>
+              {eraseMode ? '🧹 Gomme active' : '🖌 Pinceau actif'} — Échap pour quitter
+            </span>
           )}
         </div>
       </div>
 
       {/* Planning hebdomadaire — Vue principale */}
       <div className="flex-1 overflow-auto bg-slate-50">
-        <div className="bg-white [overflow:clip]" style={{ cursor: isLocked ? 'not-allowed' : brushShiftId ? 'crosshair' : eraseMode ? 'cell' : 'default' }}>
+        <div className="bg-white [overflow:clip]" style={{ cursor: brushShiftId ? 'crosshair' : eraseMode ? 'cell' : 'default' }}>
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-20 bg-white shadow-sm">
               <tr className="border-b border-slate-200">
@@ -661,31 +740,14 @@ export default function WeeklyPlanningPage() {
             </thead>
 
             <tbody className="divide-y divide-slate-50">
-              {groupedRows.map((row, rowIdx) => {
-                if (row.type === 'separator') {
-                  return (
-                    <tr key={`sep-${row.groupName}-${rowIdx}`}>
-                      <td
-                        className="sticky left-0 z-20 w-10 sm:w-52 min-w-[2.5rem] sm:min-w-[13rem] border-r border-slate-200 px-2 sm:px-4 py-1.5 bg-slate-100/95 shadow-[2px_0_4px_rgba(0,0,0,0.04)] text-[10px] font-bold text-slate-500 uppercase tracking-widest"
-                      >
-                        {row.groupName}
-                      </td>
-                      <td
-                        colSpan={8}
-                        className="bg-slate-100/80 border-b border-t border-slate-200"
-                      />
-                    </tr>
-                  );
-                }
-
-                const { employee, idx: empIdx } = row;
+              {displayedEmployees.map((employee, empIdx) => {
                 const weeklyHours = getWeeklyHours(employee.id, weekStartStr, weekEndStr);
                 const overHours = weeklyHours > employee.contractHours;
                 const empAlertsList = getEmpAlerts(employee.id);
 
                 return (
                   <tr
-                    key={`${employee.id}-${rowIdx}`}
+                    key={employee.id}
                     className={`group ${empIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/20'} hover:bg-indigo-50/10 transition-colors`}
                   >
                     {/* Infos employé — sticky comme l'en-tête */}
@@ -709,7 +771,7 @@ export default function WeeklyPlanningPage() {
                           <p className="text-sm font-semibold text-slate-800">
                             {employee.firstName} {employee.lastName}
                           </p>
-                          <p className="text-xs text-slate-400 truncate">{employee.role}</p>
+                          <p className="text-xs text-slate-400 truncate">{getPositionLabel(employee.position)}</p>
                         </div>
                         {empAlertsList.length > 0 && (
                           <div
@@ -735,6 +797,9 @@ export default function WeeklyPlanningPage() {
                       const isActive =
                         activeCell?.empId === employee.id && activeCell?.date === dateStr;
                       const cellAlerts = getCellAlerts(employee.id, dateStr);
+                      const availDisp = availabilityStatusDisplay(
+                        availabilityStatusByKey[availabilityMapKey(employee.id, dateStr)]
+                      );
 
                       return (
                         <td
@@ -780,7 +845,7 @@ export default function WeeklyPlanningPage() {
                                 </span>
                                 <span className="hidden sm:block text-[10px] font-medium leading-tight opacity-95 text-center">
                                   {(() => {
-                                    const disp = getEntryDisplayTimeRange(entry ?? undefined, shift);
+                                    const disp = getPlannedShiftTimeRange(shift);
                                     const dur = calculateShiftDuration(disp.start, disp.end);
                                     return dur > 0 ? `${disp.start}–${disp.end}` : shift.name;
                                   })()}
@@ -795,6 +860,16 @@ export default function WeeklyPlanningPage() {
                             {/* Indicateur alerte */}
                             {cellAlerts.length > 0 && (
                               <div className="absolute top-1 right-1 w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+                            )}
+
+                            {/* Indicateur disponibilité employé (★ / ✓ / ✗) */}
+                            {availDisp && (
+                              <span
+                                className={`absolute bottom-0.5 left-0.5 leading-none font-bold pointer-events-none drop-shadow-[0_0_1px_rgba(255,255,255,0.9)] text-[10px] ${availDisp.className}`}
+                                title={availDisp.title}
+                              >
+                                {availDisp.symbol}
+                              </span>
                             )}
                           </div>
                         </td>
@@ -841,7 +916,7 @@ export default function WeeklyPlanningPage() {
                       (e) => e.employeeId === emp.id && e.date === dateStr
                     );
                     const shift = entry ? shiftMap.get(entry.shiftId) : null;
-                    return sum + (entry && shift ? getEntryDurationHours(entry, shift) : 0);
+                    return sum + (entry && shift ? getPlannedEntryDurationHours(entry, shift) : 0);
                   }, 0);
                   return (
                     <td

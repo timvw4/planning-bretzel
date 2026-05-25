@@ -8,8 +8,9 @@ import {
   Trash2,
   Mail,
   Phone,
-  Clock,
   Filter,
+  ChevronDown,
+  Check,
   MoreHorizontal,
   UserCheck,
   UserX,
@@ -24,6 +25,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -31,19 +33,34 @@ import { EmployeeModal } from '@/components/employees/EmployeeModal';
 import { usePlanningStore } from '@/lib/store';
 import { Employee } from '@/lib/types';
 import { getInitials, formatDate, DAY_NAMES_FR, CONTRACT_LABELS, formatHours } from '@/lib/utils';
+import { getPositionLabel, POSITION_RULES } from '@/lib/employeePosition';
 import {
   format,
   startOfWeek,
   endOfWeek,
-  startOfMonth,
-  endOfMonth,
 } from 'date-fns';
+
+const POSITION_FILTERS = ['all', 'boulanger', 'vente', 'cuisine'] as const;
+const CONTRACT_FILTERS = ['all', 'full-time', 'part-time', 'freelance', 'intern'] as const;
+
+function getPositionFilterLabel(value: (typeof POSITION_FILTERS)[number]) {
+  return value === 'all' ? 'Tous postes' : POSITION_RULES[value].label;
+}
+
+function getContractFilterLabel(value: (typeof CONTRACT_FILTERS)[number]) {
+  if (value === 'all') return 'Tous contrats';
+  if (value === 'full-time') return 'Temps plein';
+  if (value === 'part-time') return 'Temps partiel';
+  if (value === 'freelance') return 'Freelance';
+  return 'Stagiaires';
+}
 
 export default function EmployeesPage() {
   const { employees, addEmployee, updateEmployee, deleteEmployee, getWeeklyHours, toggleMonthlyActive } =
     usePlanningStore();
   const [search, setSearch] = useState('');
   const [filterContract, setFilterContract] = useState<string>('all');
+  const [filterPosition, setFilterPosition] = useState<string>('all');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -65,12 +82,14 @@ export default function EmployeesPage() {
         !q ||
         e.firstName.toLowerCase().includes(q) ||
         e.lastName.toLowerCase().includes(q) ||
-        e.role.toLowerCase().includes(q) ||
+        getPositionLabel(e.position).toLowerCase().includes(q) ||
         e.email.toLowerCase().includes(q);
       const matchContract = filterContract === 'all' || e.contractType === filterContract;
-      return matchSearch && matchContract;
+      const matchPosition =
+        filterPosition === 'all' || e.position === filterPosition;
+      return matchSearch && matchContract && matchPosition;
     });
-  }, [employees, search, filterContract]);
+  }, [employees, search, filterContract, filterPosition]);
 
   const handleSave = (data: Omit<Employee, 'id' | 'createdAt'>) => {
     if (editingEmployee) {
@@ -105,6 +124,13 @@ export default function EmployeesPage() {
   };
 
   const activeCount = employees.filter((e) => e.isActive).length;
+  const activeFilterCount =
+    (filterPosition !== 'all' ? 1 : 0) + (filterContract !== 'all' ? 1 : 0);
+
+  const resetFilters = () => {
+    setFilterContract('all');
+    setFilterPosition('all');
+  };
 
   return (
     <div className="animate-fade-in">
@@ -125,10 +151,12 @@ export default function EmployeesPage() {
       />
 
       <div className="p-6 space-y-5">
-        {/* Filtres + Recherche */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        {/* Recherche + Filtres */}
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+          <div className="relative flex-1 max-w-md">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+              <Search className="size-4 text-slate-400" aria-hidden="true" />
+            </div>
             <Input
               placeholder="Rechercher un employé..."
               value={search}
@@ -136,29 +164,69 @@ export default function EmployeesPage() {
               className="pl-9"
             />
           </div>
-          <div className="flex gap-2">
-            {['all', 'full-time', 'part-time', 'freelance', 'intern'].map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilterContract(f)}
-                className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
-                  filterContract === f
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
-                }`}
-              >
-                {f === 'all'
-                  ? 'Tous'
-                  : f === 'full-time'
-                  ? 'Temps plein'
-                  : f === 'part-time'
-                  ? 'Temps partiel'
-                  : f === 'freelance'
-                  ? 'Freelance'
-                  : 'Stagiaires'}
-              </button>
-            ))}
-          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="gap-2 shrink-0">
+                <Filter className="size-4" />
+                Filtres
+                {activeFilterCount > 0 && (
+                  <Badge variant="secondary" className="h-5 min-w-5 px-1.5 text-[10px]">
+                    {activeFilterCount}
+                  </Badge>
+                )}
+                <ChevronDown className="size-4 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuLabel>Poste</DropdownMenuLabel>
+              {POSITION_FILTERS.map((value) => (
+                <DropdownMenuItem
+                  key={value}
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    setFilterPosition(value);
+                  }}
+                  className={filterPosition === value ? 'bg-slate-50 font-medium' : ''}
+                >
+                  <span className="flex-1">{getPositionFilterLabel(value)}</span>
+                  {filterPosition === value && <Check className="size-4 text-emerald-600" />}
+                </DropdownMenuItem>
+              ))}
+
+              <DropdownMenuSeparator />
+
+              <DropdownMenuLabel>Contrat</DropdownMenuLabel>
+              {CONTRACT_FILTERS.map((value) => (
+                <DropdownMenuItem
+                  key={value}
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    setFilterContract(value);
+                  }}
+                  className={filterContract === value ? 'bg-slate-50 font-medium' : ''}
+                >
+                  <span className="flex-1">{getContractFilterLabel(value)}</span>
+                  {filterContract === value && <Check className="size-4 text-indigo-600" />}
+                </DropdownMenuItem>
+              ))}
+
+              {activeFilterCount > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      resetFilters();
+                    }}
+                    className="text-slate-500"
+                  >
+                    Réinitialiser les filtres
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         {/* Résultats */}
@@ -173,7 +241,7 @@ export default function EmployeesPage() {
               className="mt-4"
               onClick={() => {
                 setSearch('');
-                setFilterContract('all');
+                resetFilters();
               }}
               variant="outline"
             >
@@ -215,7 +283,7 @@ export default function EmployeesPage() {
                           <h3 className="text-sm font-semibold text-slate-900">
                             {emp.firstName} {emp.lastName}
                           </h3>
-                          <p className="text-xs text-slate-500">{emp.role}</p>
+                          <p className="text-xs text-slate-500">{getPositionLabel(emp.position)}</p>
                         </div>
                       </div>
 

@@ -105,7 +105,7 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
   const navItems = [
     { href: '/employee', label: 'Mon planning', icon: Calendar },
     { href: '/employee/availability', label: 'Mes disponibilités', icon: ClipboardList },
-    { href: '/employee/timesheets', label: 'Mes heures', icon: Clock },
+    { href: '/employee/timesheets', label: 'Pointage', icon: Clock },
   ];
 
   return (

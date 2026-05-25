@@ -36,8 +36,8 @@ export function PlanningPublicationStatusBar({
         <div className="flex items-start gap-2.5 text-xs text-slate-600">
           <LayoutGrid className="h-4 w-4 text-slate-400 shrink-0 mt-0.5" />
           <p>
-            <span className="font-semibold text-slate-800">Aucun créneau sur cette période</span>
-            <span className="text-slate-500"> · {periodLabel}. Posez des shifts sur la grille ; ils resteront en brouillon jusqu&apos;au bouton « Envoyer ».</span>
+            <span className="font-semibold text-slate-800">Aucun shift sur cette période</span>
+            <span className="text-slate-500"> - Planning non communiqué pour {periodLabel}.</span>
           </p>
         </div>
       </div>
@@ -81,11 +81,10 @@ export function PlanningPublicationStatusBar({
           )}
           {allDraft && (
             <p>
-              <span className="font-semibold">Tout est en brouillon</span>
+              <span className="font-semibold">Brouillon</span>
               {' — '}
               {total} créneau{total > 1 ? 'x' : ''} : rien n&apos;est encore visible côté employé pour{' '}
-              <span className="font-medium">{periodLabel}</span>. Utilisez « Envoyer le mois » ou « Envoyer la semaine »
-              dans l&apos;en-tête.
+              <span className="font-medium">{periodLabel}</span>.
             </p>
           )}
           {!allPublished && !allDraft && (
@@ -93,21 +92,20 @@ export function PlanningPublicationStatusBar({
               <span className="font-semibold">Publication partielle</span>
               {' — '}
               <span className="font-medium">{draftCount}</span> créneau{draftCount > 1 ? 'x' : ''} encore brouillon (cadre
-              en pointillés), <span className="font-medium">{publishedCount}</span> déjà communiqué
-              {publishedCount > 1 ? 's' : ''}. Envoyez à nouveau pour publier le reste.
+              grisé), <span className="font-medium">{publishedCount}</span> déjà communiqué
+              {publishedCount > 1 ? 's' : ''}.
             </p>
           )}
         </div>
       </div>
 
-      <div className="flex items-center gap-2 shrink-0 text-[11px] font-semibold tracking-wide">
-        <span className="inline-flex items-center rounded-lg bg-white/80 border border-black/[0.06] px-2.5 py-1 text-slate-700 shadow-sm">
-          Brouillon&nbsp;: {draftCount}
-        </span>
-        <span className="inline-flex items-center rounded-lg bg-white/80 border border-black/[0.06] px-2.5 py-1 text-slate-700 shadow-sm">
-          Communiqué&nbsp;: {publishedCount}
-        </span>
-      </div>
+      {!allPublished && (
+        <div className="flex items-center gap-2 shrink-0 text-[11px] font-semibold tracking-wide">
+          <span className="inline-flex items-center rounded-lg bg-white/80 border border-black/[0.06] px-2.5 py-1 text-slate-700 shadow-sm">
+            Brouillon&nbsp;: {draftCount}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

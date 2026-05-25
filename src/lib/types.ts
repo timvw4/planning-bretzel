@@ -5,11 +5,14 @@
 export type ContractType = 'full-time' | 'part-time' | 'freelance' | 'intern';
 export type AvailabilityDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
 
+/** Poste structuré — pilote les règles horaires, dispos et (plus tard) salaires. */
+export type EmployeePosition = 'boulanger' | 'vente' | 'cuisine';
+
 export interface Employee {
   id: string;
   firstName: string;
   lastName: string;
-  role: string;
+  position: EmployeePosition;
   email: string;
   phone: string;
   color: string;           // Couleur hexadécimale attribuée dans le planning
@@ -137,11 +140,4 @@ export interface PlanningCell {
   entry?: ScheduleEntry;
   shift?: Shift;
   alerts: PlanningAlert[];
-}
-
-export interface EmployeeGroup {
-  id: string;
-  name: string;
-  memberIds: string[];
-  createdAt: string;
 }

@@ -60,6 +60,7 @@ export function calculateShiftDuration(startTime: string, endTime: string): numb
 
 /**
  * Plage horaire affichée pour une case planning : heures validées si présentes, sinon le modèle de shift.
+ * À utiliser pour le planning réel et les vues qui doivent refléter les heures approuvées.
  */
 export function getEntryDisplayTimeRange(
   entry: ScheduleEntry | undefined,
@@ -72,6 +73,29 @@ export function getEntryDisplayTimeRange(
   return { start: shift.startTime, end: shift.endTime };
 }
 
+/** Horaires prévus du modèle de shift (vue planning prévisionnel admin). */
+export function getPlannedShiftTimeRange(shift: Shift | undefined): {
+  start: string;
+  end: string;
+} {
+  if (!shift) return { start: '', end: '' };
+  return { start: shift.startTime, end: shift.endTime };
+}
+
+export function hasValidatedTimes(entry: ScheduleEntry | undefined): boolean {
+  return Boolean(entry?.validatedStart && entry?.validatedEnd);
+}
+
+export function getValidatedTimeRange(entry: ScheduleEntry): {
+  start: string;
+  end: string;
+} {
+  return {
+    start: entry.validatedStart ?? '',
+    end: entry.validatedEnd ?? '',
+  };
+}
+
 /** Durée (heures) pour une entrée : validée si renseignée, sinon durée du shift. */
 export function getEntryDurationHours(entry: ScheduleEntry, shift: Shift | undefined): number {
   if (!shift) return 0;
@@ -79,6 +103,21 @@ export function getEntryDurationHours(entry: ScheduleEntry, shift: Shift | undef
     return calculateShiftDuration(entry.validatedStart, entry.validatedEnd);
   }
   return shift.durationHours ?? 0;
+}
+
+/** Durée prévue (modèle shift), ignore les heures validées. */
+export function getPlannedEntryDurationHours(
+  entry: ScheduleEntry,
+  shift: Shift | undefined
+): number {
+  if (!shift) return 0;
+  return shift.durationHours ?? 0;
+}
+
+/** Durée réelle validée ; 0 si le jour n’est pas validé. */
+export function getValidatedEntryDurationHours(entry: ScheduleEntry): number {
+  if (!entry.validatedStart || !entry.validatedEnd) return 0;
+  return calculateShiftDuration(entry.validatedStart, entry.validatedEnd);
 }
 
 /** Début du shift sur le jour `dateStr` (heure locale). */
@@ -329,23 +368,85 @@ export function buildPlanningAlerts(
   return [...weekly, ...validated];
 }
 
-/** Plage de dates pour charger availability_requests (bornes des entrées ou ±3 mois). */
+/** Fenêtre minimale (± mois autour d’une date) pour ne pas manquer des dispos hors plage des entrées planning. */
+const AVAILABILITY_PAD_MONTHS = 6;
+
+/** Plage pour charger availability_requests : union (bornes des entrées ± fenêtre autour d’aujourd’hui). */
 export function getAvailabilityFetchRange(
   scheduleEntries: ScheduleEntry[],
   referenceDate: Date
 ): { rangeFrom: string; rangeTo: string } {
+  const padFrom = format(subMonths(referenceDate, AVAILABILITY_PAD_MONTHS), 'yyyy-MM-dd');
+  const padTo = format(addMonths(referenceDate, AVAILABILITY_PAD_MONTHS), 'yyyy-MM-dd');
+
   const dates = scheduleEntries.map((e) => e.date).filter(Boolean);
   const sorted = [...dates].sort();
+  if (sorted.length === 0) {
+    return { rangeFrom: padFrom, rangeTo: padTo };
+  }
+  const entryMin = sorted[0]!;
+  const entryMax = sorted[sorted.length - 1]!;
   return {
-    rangeFrom:
-      sorted.length > 0
-        ? sorted[0]!
-        : format(subMonths(referenceDate, 3), 'yyyy-MM-dd'),
-    rangeTo:
-      sorted.length > 0
-        ? sorted[sorted.length - 1]!
-        : format(addMonths(referenceDate, 3), 'yyyy-MM-dd'),
+    rangeFrom: entryMin < padFrom ? entryMin : padFrom,
+    rangeTo: entryMax > padTo ? entryMax : padTo,
   };
+}
+
+export function availabilityMapKey(employeeId: string, date: string): string {
+  return `${employeeId}|${date}`;
+}
+
+/**
+ * Remplace les statuts pour les jours dans [windowFrom, windowTo], puis applique les lignes serveur.
+ * Permet de retirer une entrée supprimée côté employé lors d’un re-fetch de fenêtre.
+ */
+export function mergeAvailabilityWindowIntoMap(
+  prev: Record<string, string>,
+  windowFrom: string,
+  windowTo: string,
+  rows: AvailabilityRequestRow[]
+): Record<string, string> {
+  const next: Record<string, string> = { ...prev };
+  for (const key of Object.keys(next)) {
+    const parts = key.split('|');
+    const datePart = parts.length >= 2 ? parts[parts.length - 1]! : '';
+    if (datePart >= windowFrom && datePart <= windowTo) {
+      delete next[key];
+    }
+  }
+  for (const r of rows) {
+    next[availabilityMapKey(r.employeeId, r.date)] = r.status;
+  }
+  return next;
+}
+
+/** Représentation admin (planning) alignée sur les statuts employé : available / preferred / unavailable. */
+export function availabilityStatusDisplay(
+  status: string | undefined | null
+): { symbol: string; title: string; className: string } | null {
+  if (!status) return null;
+  switch (status) {
+    case 'available':
+      return {
+        symbol: '✓',
+        title: 'Disponibilité : Disponible',
+        className: 'text-emerald-600',
+      };
+    case 'preferred':
+      return {
+        symbol: '★',
+        title: 'Disponibilité : Préféré',
+        className: 'text-amber-700',
+      };
+    case 'unavailable':
+      return {
+        symbol: '✗',
+        title: 'Disponibilité : Indisponible',
+        className: 'text-red-600',
+      };
+    default:
+      return null;
+  }
 }
 
 // ---- POSITIONNEMENT POPUP ----

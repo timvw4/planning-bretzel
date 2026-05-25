@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ChevronLeft,
   ChevronRight,
@@ -11,11 +12,10 @@ import {
   ZoomOut,
   Maximize2,
   Eraser,
-  Lock,
-  Users,
-  UsersRound,
   ChevronDown,
   Send,
+  Filter,
+  CalendarRange,
 } from 'lucide-react';
 import {
   format,
@@ -29,6 +29,7 @@ import {
   subMonths,
   getDay,
   isSameMonth,
+  parseISO,
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import toast from 'react-hot-toast';
@@ -46,6 +47,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -54,8 +56,8 @@ import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
-import { Employee } from '@/lib/types';
-import { formatDate, formatHours, getInitials, calcPickerPosition, getEntryDisplayTimeRange, calculateShiftDuration } from '@/lib/utils';
+import { getInitials, formatHours, formatDate, calcPickerPosition, getPlannedShiftTimeRange, calculateShiftDuration, availabilityStatusDisplay, availabilityMapKey, getPlannedEntryDurationHours } from '@/lib/utils';
+import { getPositionLabel } from '@/lib/employeePosition';
 
 // ── Niveaux de zoom ──────────────────────────────────────────
 // Chaque niveau définit la largeur minimale des cellules-jours
@@ -71,6 +73,10 @@ const ZOOM_LEVELS = [
 const DEFAULT_ZOOM = 2; // index dans le tableau (100%)
 
 export default function MonthlyPlanningPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const dateParam = searchParams.get('date');
+
   const {
     employees,
     shifts,
@@ -80,9 +86,9 @@ export default function MonthlyPlanningPage() {
     getMonthlyHours,
     alerts,
     settings,
-    isMonthLocked,
     publishMonthForEmployees,
-    groups,
+    availabilityStatusByKey,
+    mergeAvailabilityRequests,
   } = usePlanningStore(
     useShallow((s) => ({
       employees: s.employees,
@@ -93,9 +99,9 @@ export default function MonthlyPlanningPage() {
       getMonthlyHours: s.getMonthlyHours,
       alerts: s.alerts,
       settings: s.settings,
-      isMonthLocked: s.isMonthLocked,
       publishMonthForEmployees: s.publishMonthForEmployees,
-      groups: s.groups,
+      availabilityStatusByKey: s.availabilityStatusByKey,
+      mergeAvailabilityRequests: s.mergeAvailabilityRequests,
     }))
   );
 
@@ -109,8 +115,6 @@ export default function MonthlyPlanningPage() {
   /** 'all' = tous les employés actifs du mois ; 'subset' = liste dans selectedEmployeeIds */
   const [employeeFilterMode, setEmployeeFilterMode] = useState<'all' | 'subset'>('all');
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
-  /** Groupe sélectionné pour filtrer (null = tous les groupes) */
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   // ── Mode pinceau : shift sélectionné pour assignation rapide ─
   const [brushShiftId, setBrushShiftId] = useState<string | null>(null);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
@@ -136,10 +140,11 @@ export default function MonthlyPlanningPage() {
     ? endOfWeek(monthEnd, { weekStartsOn: 1 })
     : monthEnd;
   const monthDays     = eachDayOfInterval({ start: displayStart, end: displayEnd });
+  const availWindowFrom = format(displayStart, 'yyyy-MM-dd');
+  const availWindowTo   = format(displayEnd, 'yyyy-MM-dd');
   // Pour le calcul des heures et des exports, on garde les bornes strictes du mois
   const monthStartStr = format(monthStart, 'yyyy-MM-dd');
   const monthEndStr   = format(monthEnd,   'yyyy-MM-dd');
-  const isLocked      = isMonthLocked(monthKey);
 
   // Mémorisé : un simple .filter() recréerait un nouveau tableau à chaque rendu et
   // relancerait en boucle le useEffect qui nettoie selectedEmployeeIds (Maximum update depth).
@@ -159,51 +164,9 @@ export default function MonthlyPlanningPage() {
   );
 
   const displayedEmployees = useMemo(() => {
-    let base =
-      employeeFilterMode === 'all'
-        ? activeEmployees
-        : activeEmployees.filter((e) => new Set(selectedEmployeeIds).has(e.id));
-    if (selectedGroupId) {
-      const grp = groups.find((g) => g.id === selectedGroupId);
-      if (grp) {
-        const memberSet = new Set(grp.memberIds);
-        base = base.filter((e) => memberSet.has(e.id));
-      }
-    }
-    return base;
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees, selectedGroupId, groups]);
-
-  /** Lignes du tableau : séparateurs de groupe + lignes employé */
-  const groupedRows = useMemo(() => {
-    type SepRow = { type: 'separator'; groupName: string };
-    type EmpRow = { type: 'employee'; employee: Employee; idx: number };
-    const rows: (SepRow | EmpRow)[] = [];
-
-    if (selectedGroupId !== null || groups.length === 0) {
-      displayedEmployees.forEach((e, i) => rows.push({ type: 'employee', employee: e, idx: i }));
-      return rows;
-    }
-
-    const assignedIds = new Set<string>();
-    let empIdx = 0;
-    for (const grp of groups) {
-      const members = displayedEmployees.filter((e) => grp.memberIds.includes(e.id));
-      if (members.length === 0) continue;
-      rows.push({ type: 'separator', groupName: grp.name });
-      for (const emp of members) {
-        rows.push({ type: 'employee', employee: emp, idx: empIdx++ });
-        assignedIds.add(emp.id);
-      }
-    }
-    const ungrouped = displayedEmployees.filter((e) => !assignedIds.has(e.id));
-    if (ungrouped.length > 0) {
-      if (rows.length > 0) rows.push({ type: 'separator', groupName: 'Sans groupe' });
-      for (const emp of ungrouped) {
-        rows.push({ type: 'employee', employee: emp, idx: empIdx++ });
-      }
-    }
-    return rows;
-  }, [displayedEmployees, groups, selectedGroupId]);
+    if (employeeFilterMode === 'all') return activeEmployees;
+    return activeEmployees.filter((e) => new Set(selectedEmployeeIds).has(e.id));
+  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
 
   const filterSummaryTitle = useMemo(() => {
     const list =
@@ -220,7 +183,7 @@ export default function MonthlyPlanningPage() {
     if (n === 0) return 'Aucun employé actif';
     if (employeeFilterMode === 'all') return `Tous les employés (${n})`;
     const k = selectedEmployeeIds.length;
-    if (k === 0) return `Tous les employés (${n})`;
+    if (k === 0) return 'Aucun employé';
     if (k === 1) {
       const e = activeEmployees.find((x) => x.id === selectedEmployeeIds[0]);
       return e
@@ -230,15 +193,26 @@ export default function MonthlyPlanningPage() {
     return `${k} employés`;
   }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
 
+  /** Résumé complet pour l’info-bulle du bouton Filtre */
+  const unifiedFilterTitle = filterSummaryTitle || filterSummaryLabel;
+
+  const hasActiveFilters = employeeFilterMode === 'subset';
+
+  useEffect(() => {
+    if (!dateParam) return;
+    const parsed = parseISO(dateParam);
+    if (!Number.isNaN(parsed.getTime())) setCurrentMonth(parsed);
+  }, [dateParam]);
+
+  useEffect(() => {
+    void mergeAvailabilityRequests(availWindowFrom, availWindowTo);
+  }, [availWindowFrom, availWindowTo, mergeAvailabilityRequests]);
+
   useEffect(() => {
     if (employeeFilterMode !== 'subset') return;
     const valid = new Set(activeEmployees.map((e) => e.id));
     setSelectedEmployeeIds((prev) => {
       const pruned = prev.filter((id) => valid.has(id));
-      if (pruned.length === 0 && activeEmployees.length > 0) {
-        queueMicrotask(() => setEmployeeFilterMode('all'));
-        return [];
-      }
       if (
         pruned.length === activeEmployees.length &&
         activeEmployees.length > 0 &&
@@ -251,21 +225,26 @@ export default function MonthlyPlanningPage() {
     });
   }, [activeEmployees, monthKey, employeeFilterMode]);
 
-  const isEmployeeRowChecked = (id: string) =>
-    employeeFilterMode === 'all' || selectedEmployeeIds.includes(id);
+  const areAllEmployeesSelected =
+    employeeFilterMode === 'all' ||
+    (activeEmployees.length > 0 &&
+      activeEmployees.every((e) => selectedEmployeeIds.includes(e.id)));
 
-  const handleToggleAllEmployees = (checked: boolean) => {
-    if (checked) {
-      setEmployeeFilterMode('all');
+  const isEmployeeRowChecked = (id: string) =>
+    areAllEmployeesSelected || selectedEmployeeIds.includes(id);
+
+  const handleToggleAllEmployees = () => {
+    if (areAllEmployeesSelected) {
+      setEmployeeFilterMode('subset');
       setSelectedEmployeeIds([]);
     } else {
-      setEmployeeFilterMode('subset');
-      setSelectedEmployeeIds(activeEmployees.map((e) => e.id));
+      setEmployeeFilterMode('all');
+      setSelectedEmployeeIds([]);
     }
   };
 
   const handleToggleOneEmployee = (id: string, checked: boolean) => {
-    if (employeeFilterMode === 'all') {
+    if (areAllEmployeesSelected) {
       if (!checked) {
         setEmployeeFilterMode('subset');
         setSelectedEmployeeIds(activeEmployees.map((e) => e.id).filter((x) => x !== id));
@@ -281,13 +260,8 @@ export default function MonthlyPlanningPage() {
         setSelectedEmployeeIds(next);
       }
     } else {
-      const next = selectedEmployeeIds.filter((x) => x !== id);
-      if (next.length === 0) {
-        setEmployeeFilterMode('all');
-        setSelectedEmployeeIds([]);
-      } else {
-        setSelectedEmployeeIds(next);
-      }
+      setEmployeeFilterMode('subset');
+      setSelectedEmployeeIds(selectedEmployeeIds.filter((x) => x !== id));
     }
   };
 
@@ -339,9 +313,6 @@ export default function MonthlyPlanningPage() {
     (empId: string, date: string, e: React.MouseEvent) => {
       e.stopPropagation();
 
-      // Mois verrouillé : lecture seule
-      if (isLocked) return;
-
       // Mode gomme : effacement direct
       if (eraseMode) {
         removeShift(empId, date);
@@ -369,7 +340,7 @@ export default function MonthlyPlanningPage() {
         setActiveCell({ empId, date }); setPickerPos(calcPickerPosition(rect));
       }
     },
-    [activeCell, brushShiftId, eraseMode, isLocked, scheduleEntries, assignShift, removeShift]
+    [activeCell, brushShiftId, eraseMode, scheduleEntries, assignShift, removeShift]
   );
 
   const handleShiftSelect = (shiftId: string) => {
@@ -468,91 +439,44 @@ export default function MonthlyPlanningPage() {
   // ── Colonne employé : largeur adaptée au zoom ───────────────
   const empColW = zoom.id === 'xs' ? 100 : zoom.id === 'sm' ? 120 : 152;
 
+  const totalMonthHours = displayedEmployees.reduce(
+    (sum, emp) => sum + getMonthlyHours(emp.id, monthStartStr, monthEndStr),
+    0
+  );
+
   return (
     <div className="animate-fade-in flex flex-col h-screen">
       {/* ── En-tête ─────────────────────────────────────────── */}
       <Header
-        title="Planning mensuel"
-        subtitle={formatDate(currentMonth, 'MMMM yyyy')}
+        title="Planning prévu"
         actions={
           <div className="flex items-center gap-2">
-            {/* Filtre par groupe */}
-            {groups.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-9 min-w-[9rem] max-w-[min(100%,14rem)] justify-between gap-2 font-normal px-3"
-                  >
-                    <span className="flex items-center gap-2 min-w-0">
-                      <UsersRound className="h-4 w-4 shrink-0 text-slate-500" />
-                      <span className="truncate text-left text-sm text-slate-700">
-                        {selectedGroupId
-                          ? (groups.find((g) => g.id === selectedGroupId)?.name ?? 'Groupe')
-                          : 'Tous les groupes'}
-                      </span>
-                    </span>
-                    <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel className="text-xs font-semibold text-slate-500">
-                    Filtrer par groupe
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuCheckboxItem
-                    checked={selectedGroupId === null}
-                    onCheckedChange={() => setSelectedGroupId(null)}
-                    onSelect={(e) => e.preventDefault()}
-                  >
-                    Tous les groupes
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuSeparator />
-                  {groups.map((g) => (
-                    <DropdownMenuCheckboxItem
-                      key={g.id}
-                      checked={selectedGroupId === g.id}
-                      onCheckedChange={() => setSelectedGroupId(g.id)}
-                      onSelect={(e) => e.preventDefault()}
-                    >
-                      <span className="flex items-center justify-between w-full gap-2">
-                        <span>{g.name}</span>
-                        <span className="text-[10px] text-slate-400 shrink-0">
-                          {g.memberIds.length} membre{g.memberIds.length > 1 ? 's' : ''}
-                        </span>
-                      </span>
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-
+            {/* Filtre groupes + employés */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-9 min-w-[11rem] max-w-[min(100%,16rem)] justify-between gap-2 font-normal px-3"
-                  title={filterSummaryTitle || undefined}
+                  className="h-9 min-w-[7rem] justify-between gap-2 font-normal px-3"
+                  title={unifiedFilterTitle || undefined}
                   disabled={activeEmployees.length === 0}
                 >
                   <span className="flex items-center gap-2 min-w-0">
-                    <Users className="h-4 w-4 shrink-0 text-slate-500" />
-                    <span className="truncate text-left text-sm text-slate-700">
-                      {filterSummaryLabel}
-                    </span>
+                    <Filter className="h-4 w-4 shrink-0 text-slate-500" />
+                    <span className="text-sm text-slate-700">Filtre</span>
+                    {hasActiveFilters && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" aria-hidden />
+                    )}
                   </span>
                   <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-80 max-h-80 overflow-y-auto">
+              <DropdownMenuContent align="end" className="w-80 max-h-[min(24rem,70vh)] overflow-y-auto">
                 <DropdownMenuLabel className="text-xs font-semibold text-slate-500">
                   Employés affichés
                 </DropdownMenuLabel>
-                <DropdownMenuSeparator />
                 <DropdownMenuCheckboxItem
-                  checked={employeeFilterMode === 'all'}
+                  checked={areAllEmployeesSelected}
                   onCheckedChange={handleToggleAllEmployees}
                   onSelect={(e) => e.preventDefault()}
                 >
@@ -595,12 +519,24 @@ export default function MonthlyPlanningPage() {
             </Button>
 
             {/* Exports */}
-            <Button variant="outline" size="sm" onClick={handleExportExcel}>
-              <Download className="h-4 w-4" /> Excel
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleExportPDF}>
-              <Download className="h-4 w-4" /> PDF
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-1.5">
+                  <Download className="h-4 w-4" />
+                  
+                  <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Format</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => void handleExportExcel()}>
+                  Excel
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void handleExportPDF()}>
+                  PDF
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         }
       />
@@ -609,16 +545,18 @@ export default function MonthlyPlanningPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Envoyer le mois aux employés ?</DialogTitle>
-            <DialogDescription className="text-sm text-slate-600 space-y-2 pt-1">
-              <p>
-                Tous les créneaux du mois de{' '}
-                <strong>{format(currentMonth, 'MMMM yyyy', { locale: fr })}</strong> deviendront visibles sur le
-                compte employé (planning du mois affiché).
-              </p>
-              <p className="text-xs text-slate-500">
-                Jusqu&apos;ici, les shifts que vous posez restent en <strong>brouillon</strong> (cadre en pointillés
-                sur la grille). Après envoi, les employés les voient.
-              </p>
+            <DialogDescription asChild>
+              <div className="text-sm text-slate-600 space-y-2 pt-1">
+                <p>
+                  Tous les créneaux du mois de{' '}
+                  <strong>{format(currentMonth, 'MMMM yyyy', { locale: fr })}</strong> deviendront visibles sur le
+                  compte employé (planning du mois affiché).
+                </p>
+                <p className="text-xs text-slate-500">
+                  Jusqu&apos;ici, les shifts que vous posez restent en <strong>brouillon</strong> (cadre en pointillés
+                  sur la grille). Après envoi, les employés les voient.
+                </p>
+              </div>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">
@@ -657,6 +595,17 @@ export default function MonthlyPlanningPage() {
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setCurrentMonth(new Date())} className="text-xs text-slate-500 ml-1">
                 <RotateCcw className="h-3.5 w-3.5" /> Aujourd'hui
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  router.push(`/planning/weekly?date=${format(currentMonth, 'yyyy-MM-dd')}`)
+                }
+                className="text-xs ml-2 gap-1.5"
+              >
+                <CalendarRange className="h-3.5 w-3.5" />
+                Vue hebdomadaire
               </Button>
             </div>
 
@@ -715,73 +664,50 @@ export default function MonthlyPlanningPage() {
             periodLabel={format(currentMonth, 'MMMM yyyy', { locale: fr })}
           />
 
-          {/* Ligne 2 : légende shifts + pinceau + gomme (ou badge verrouillé) */}
+          {/* Ligne 2 : légende shifts + pinceau + gomme */}
           <div className="flex items-center gap-2 px-6 pb-2.5 flex-wrap">
-            {isLocked ? (
-              /* Mois verrouillé : afficher uniquement les badges en lecture seule */
-              <>
-                <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-3 py-1.5 shrink-0">
-                  <Lock className="h-3.5 w-3.5" />
-                  <span className="text-[11px] font-semibold">Mois validé</span>
-                </div>
-                <div className="h-4 w-px bg-slate-200 mx-1 shrink-0" />
-                {shifts.filter((s) => s.isActive).map((shift) => (
-                  <span
-                    key={shift.id}
-                    className="px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap opacity-60"
-                    style={{ backgroundColor: shift.color, color: shift.textColor }}
-                  >
-                    {shift.shortName}
-                  </span>
-                ))}
-              </>
-            ) : (
-              /* Mode normal : pinceau + gomme */
-              <>
-                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mr-1 shrink-0">
-                  Sélectionner :
-                </span>
-                {shifts.filter((s) => s.isActive).map((shift) => {
-                  const isActive = brushShiftId === shift.id;
-                  return (
-                    <button
-                      key={shift.id}
-                      onClick={() => handleBrushSelect(shift.id)}
-                      title={`Peindre "${shift.name}"`}
-                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all duration-150 ${
-                        isActive
-                          ? 'ring-2 ring-offset-1 ring-slate-700 scale-110 shadow-md'
-                          : 'hover:scale-105 hover:shadow-sm opacity-75 hover:opacity-100'
-                      }`}
-                      style={{ backgroundColor: shift.color, color: shift.textColor }}
-                    >
-                      {shift.shortName}
-                    </button>
-                  );
-                })}
-                <div className="h-4 w-px bg-slate-200 mx-1 shrink-0" />
+            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mr-1 shrink-0">
+              Sélectionner :
+            </span>
+            {shifts.filter((s) => s.isActive).map((shift) => {
+              const isActive = brushShiftId === shift.id;
+              return (
                 <button
-                  onClick={handleEraseToggle}
-                  title="Effacer des shifts en cliquant sur les cases"
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all duration-150 border shrink-0 ${
-                    eraseMode
-                      ? 'bg-red-500 text-white border-red-500 ring-2 ring-offset-1 ring-red-500 scale-110 shadow-md'
-                      : 'bg-white text-slate-500 border-slate-200 hover:border-red-300 hover:text-red-500 hover:scale-105'
+                  key={shift.id}
+                  onClick={() => handleBrushSelect(shift.id)}
+                  title={`Peindre "${shift.name}"`}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all duration-150 ${
+                    isActive
+                      ? 'ring-2 ring-offset-1 ring-slate-700 scale-110 shadow-md'
+                      : 'hover:scale-105 hover:shadow-sm opacity-75 hover:opacity-100'
                   }`}
+                  style={{ backgroundColor: shift.color, color: shift.textColor }}
                 >
-                  <Eraser className="h-3 w-3" />
-                  Effacer
+                  {shift.shortName}
                 </button>
-                {(brushShiftId || eraseMode) && (
-                  <span className={`ml-1 text-[10px] font-semibold border rounded-lg px-2 py-1 flex items-center gap-1 shrink-0 ${
-                    eraseMode
-                      ? 'text-red-600 bg-red-50 border-red-200'
-                      : 'text-indigo-600 bg-indigo-50 border-indigo-200'
-                  }`}>
-                    {eraseMode ? '🧹 Gomme active' : '🖌 Pinceau actif'} — Échap pour quitter
-                  </span>
-                )}
-              </>
+              );
+            })}
+            <div className="h-4 w-px bg-slate-200 mx-1 shrink-0" />
+            <button
+              onClick={handleEraseToggle}
+              title="Effacer des shifts en cliquant sur les cases"
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all duration-150 border shrink-0 ${
+                eraseMode
+                  ? 'bg-red-500 text-white border-red-500 ring-2 ring-offset-1 ring-red-500 scale-110 shadow-md'
+                  : 'bg-white text-slate-500 border-slate-200 hover:border-red-300 hover:text-red-500 hover:scale-105'
+              }`}
+            >
+              <Eraser className="h-3 w-3" />
+              Effacer
+            </button>
+            {(brushShiftId || eraseMode) && (
+              <span className={`ml-1 text-[10px] font-semibold border rounded-lg px-2 py-1 flex items-center gap-1 shrink-0 ${
+                eraseMode
+                  ? 'text-red-600 bg-red-50 border-red-200'
+                  : 'text-indigo-600 bg-indigo-50 border-indigo-200'
+              }`}>
+                {eraseMode ? '🧹 Gomme active' : '🖌 Pinceau actif'} — Échap pour quitter
+              </span>
             )}
           </div>
         </div>
@@ -790,7 +716,7 @@ export default function MonthlyPlanningPage() {
         <div className="flex-1 overflow-auto bg-slate-50">
           <table
             className="border-collapse"
-            style={{ tableLayout: 'fixed', width: '100%', cursor: isLocked ? 'not-allowed' : brushShiftId ? 'crosshair' : eraseMode ? 'cell' : 'default' }}
+            style={{ tableLayout: 'fixed', width: '100%', cursor: brushShiftId ? 'crosshair' : eraseMode ? 'cell' : 'default' }}
           >
             {/* ── En-têtes colonnes ─────────────────────────── */}
             <thead className="sticky top-0 z-20 bg-white shadow-sm">
@@ -894,27 +820,7 @@ export default function MonthlyPlanningPage() {
 
             {/* ── Corps du tableau ───────────────────────────── */}
             <tbody>
-              {groupedRows.map((row, rowIdx) => {
-                if (row.type === 'separator') {
-                  return (
-                    <tr key={`sep-${row.groupName}-${rowIdx}`}>
-                      {/* Colonne groupe : même largeur et sticky que la colonne employés */}
-                      <td
-                        className="sticky left-0 z-20 border-r border-slate-200 px-3 py-1.5 bg-slate-100/95 shadow-[2px_0_4px_rgba(0,0,0,0.04)] text-[10px] font-bold text-slate-500 uppercase tracking-widest"
-                        style={{ width: empColW, minWidth: empColW }}
-                      >
-                        {row.groupName}
-                      </td>
-                      {/* Bandeau sur le reste du tableau (jours + total) */}
-                      <td
-                        colSpan={monthDays.length + 1}
-                        className="bg-slate-100/80 border-b border-t border-slate-200"
-                      />
-                    </tr>
-                  );
-                }
-
-                const { employee, idx: empIdx } = row;
+              {displayedEmployees.map((employee, empIdx) => {
                 const monthlyHours = getMonthlyHours(employee.id, monthStartStr, monthEndStr);
                 const overHours    = monthlyHours > employee.contractHours * 4.33;
                 const empAlerts    = alerts.filter((a) => !a.resolved && a.employeeId === employee.id);
@@ -922,7 +828,7 @@ export default function MonthlyPlanningPage() {
 
                 return (
                   <tr
-                    key={`${employee.id}-${rowIdx}`}
+                    key={employee.id}
                     className={`group/row border-b border-slate-100 hover:brightness-[0.98] transition-all ${
                       isEven ? 'bg-white' : 'bg-slate-50/60'
                     }`}
@@ -955,9 +861,9 @@ export default function MonthlyPlanningPage() {
                               {employee.firstName}
                               {employee.lastName ? ` ${employee.lastName}` : ''}
                             </p>
-                            {employee.role && zoom.cellMinW >= 52 && (
+                            {zoom.cellMinW >= 52 && (
                               <p className="text-[9px] text-slate-400 truncate leading-tight">
-                                {employee.role}
+                                {getPositionLabel(employee.position)}
                               </p>
                             )}
                           </div>
@@ -977,7 +883,7 @@ export default function MonthlyPlanningPage() {
                         (e) => e.employeeId === employee.id && e.date === dateStr
                       );
                       const shift          = entry ? shiftMap.get(entry.shiftId) : null;
-                      const displayTimes   = shift ? getEntryDisplayTimeRange(entry ?? undefined, shift) : { start: '', end: '' };
+                      const displayTimes   = shift ? getPlannedShiftTimeRange(shift) : { start: '', end: '' };
                       const showValidatedTime =
                         Boolean(shift && zoom.showTime && calculateShiftDuration(displayTimes.start, displayTimes.end) > 0);
                       const dow            = getDay(day);
@@ -987,6 +893,9 @@ export default function MonthlyPlanningPage() {
                       const isCurrentMonth = isSameMonth(day, currentMonth);
                       const isActive       = activeCell?.empId === employee.id && activeCell?.date === dateStr;
                       const cellAlerts     = getCellAlerts(employee.id, dateStr);
+                      const availDisp      = availabilityStatusDisplay(
+                        availabilityStatusByKey[availabilityMapKey(employee.id, dateStr)]
+                      );
 
                       return (
                         <td
@@ -1043,7 +952,7 @@ export default function MonthlyPlanningPage() {
                                   {shift.shortName}
                                 </span>
 
-                                {/* Heure de début–fin (si zoom lg/xl) — horaires validés si présents */}
+                                {/* Heure de début–fin (si zoom lg/xl) — horaires prévus du shift */}
                                 {showValidatedTime && (
                                   <span
                                     className="leading-none mt-0.5 opacity-80"
@@ -1063,6 +972,18 @@ export default function MonthlyPlanningPage() {
                             {/* Pastille alerte */}
                             {cellAlerts.length > 0 && (
                               <div className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-amber-500 rounded-full" />
+                            )}
+
+                            {/* Indicateur disponibilité employé (★ / ✓ / ✗) — masqué au zoom minimal */}
+                            {availDisp && zoom.id !== 'xs' && (
+                              <span
+                                className={`absolute bottom-0.5 left-0.5 leading-none font-bold pointer-events-none drop-shadow-[0_0_1px_rgba(255,255,255,0.9)] ${availDisp.className} ${
+                                  zoom.cellMinW >= 52 ? 'text-[10px]' : 'text-[8px]'
+                                }`}
+                                title={availDisp.title}
+                              >
+                                {availDisp.symbol}
+                              </span>
                             )}
                           </div>
                         </td>
@@ -1089,6 +1010,61 @@ export default function MonthlyPlanningPage() {
                 );
               })}
             </tbody>
+
+            {/* ── Pied de tableau — totaux par jour ─────────── */}
+            <tfoot>
+              <tr className="border-t-2 border-slate-200 bg-slate-50">
+                <td
+                  className="sticky left-0 z-10 bg-slate-50 border-r border-slate-200 px-3 py-2 shadow-[2px_0_4px_rgba(0,0,0,0.04)]"
+                  style={{ width: empColW, minWidth: empColW }}
+                >
+                  <p
+                    className={`font-semibold text-slate-600 leading-none ${
+                      zoom.cellMinW >= 52 ? 'text-xs' : 'text-[10px]'
+                    }`}
+                  >
+                    Total / jour
+                  </p>
+                </td>
+                {monthDays.map((day) => {
+                  const dateStr = format(day, 'yyyy-MM-dd');
+                  const isCurrentMonth = isSameMonth(day, currentMonth);
+                  const dayTotal = displayedEmployees.reduce((sum, emp) => {
+                    const entry = scheduleEntries.find(
+                      (e) => e.employeeId === emp.id && e.date === dateStr
+                    );
+                    const shift = entry ? shiftMap.get(entry.shiftId) : null;
+                    return sum + (entry && shift ? getPlannedEntryDurationHours(entry, shift) : 0);
+                  }, 0);
+                  return (
+                    <td
+                      key={dateStr}
+                      className={`border-r border-slate-200 px-1 py-2 text-center ${
+                        !isCurrentMonth ? 'opacity-50' : ''
+                      }`}
+                      style={{ minWidth: zoom.cellMinW, width: zoom.cellMinW }}
+                    >
+                      <span
+                        className={`font-semibold leading-none ${
+                          zoom.cellMinW >= 52 ? 'text-[10px]' : 'text-[9px]'
+                        } ${dayTotal > 0 ? 'text-slate-700' : 'text-slate-300'}`}
+                      >
+                        {dayTotal > 0 ? formatHours(dayTotal) : '—'}
+                      </span>
+                    </td>
+                  );
+                })}
+                <td className="text-center px-1 py-2" style={{ width: 52, minWidth: 52 }}>
+                  <span
+                    className={`font-bold text-indigo-600 leading-none ${
+                      zoom.cellMinW >= 52 ? 'text-xs' : 'text-[9px]'
+                    }`}
+                  >
+                    {totalMonthHours > 0 ? formatHours(totalMonthHours) : '—'}
+                  </span>
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
 

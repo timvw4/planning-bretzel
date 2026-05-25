@@ -6,19 +6,17 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
   Users,
-  UsersRound,
   Clock,
   CalendarDays,
-  CalendarRange,
   Settings,
   ChevronRight,
   ChevronLeft,
-  ShieldCheck,
   LogOut,
   CalendarCheck,
   PanelLeftClose,
   PanelLeftOpen,
   ClipboardList,
+  BadgeCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePlanningStore } from '@/lib/store';
@@ -36,19 +34,17 @@ const navigation = [
   {
     label: 'Planning',
     items: [
-      { name: 'Vue mensuelle', href: '/planning/monthly', icon: CalendarDays },
-      { name: 'Vue hebdomadaire', href: '/planning/weekly', icon: CalendarRange },
+      { name: 'Planning prévu', href: '/planning/monthly', icon: CalendarDays, alsoActiveOn: ['/planning/weekly'] },
+      { name: 'Planning réel', href: '/planning/real/monthly', icon: BadgeCheck, alsoActiveOn: ['/planning/real/weekly'] },
     ],
   },
   {
     label: 'Gestion',
     items: [
       { name: 'Employés', href: '/employees', icon: Users },
-      { name: 'Groupes', href: '/groups', icon: UsersRound },
       { name: 'Shifts', href: '/shifts', icon: Clock },
       { name: 'Disponibilités', href: '/availability', icon: CalendarCheck },
-      { name: 'Feuilles d\'heures', href: '/timesheets', icon: ClipboardList },
-      { name: 'Validation', href: '/validation', icon: ShieldCheck },
+      { name: 'Pointages', href: '/pointages', icon: ClipboardList },
     ],
   },
   {
@@ -86,7 +82,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         supabase
           .from('time_declarations')
           .select('*', { count: 'exact', head: true })
-          .eq('status', 'pending'),
+          .in('status', ['pending', 'auto_closed']),
       ]);
       setPendingUnlockCount(unlockCount ?? 0);
       setPendingTimesheetCount(timesheetCount ?? 0);
@@ -160,10 +156,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             )}
             <ul className="space-y-0.5">
               {group.items.map((item) => {
-                const isActive = pathname === item.href;
+                const isActive =
+                  pathname === item.href ||
+                  ('alsoActiveOn' in item &&
+                    Array.isArray(item.alsoActiveOn) &&
+                    item.alsoActiveOn.includes(pathname));
                 const showBadge = item.href === '/' && activeAlerts.length > 0;
                 const showAvailBadge = item.href === '/availability' && pendingUnlockCount > 0;
-                const showTimesheetBadge = item.href === '/timesheets' && pendingTimesheetCount > 0;
+                const showTimesheetBadge = item.href === '/pointages' && pendingTimesheetCount > 0;
                 const hasBadge = showBadge || showAvailBadge || showTimesheetBadge;
                 const badgeCount = showBadge ? activeAlerts.length : showAvailBadge ? pendingUnlockCount : pendingTimesheetCount;
                 const badgeColor = showBadge ? 'bg-red-500' : 'bg-amber-500';

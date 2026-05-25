@@ -4,6 +4,7 @@
 
 import { Employee, Shift, ScheduleEntry } from './types';
 import { formatHours } from './utils';
+import { getPositionLabel } from './employeePosition';
 import { format, eachDayOfInterval, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
@@ -51,7 +52,7 @@ export async function exportToExcel(
         return sum + (shift?.durationHours ?? 0);
       }, 0);
 
-      return [`${emp.firstName} ${emp.lastName}`, emp.role, ...shiftCells, formatHours(totalHours)];
+      return [`${emp.firstName} ${emp.lastName}`, getPositionLabel(emp.position), ...shiftCells, formatHours(totalHours)];
     });
 
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
