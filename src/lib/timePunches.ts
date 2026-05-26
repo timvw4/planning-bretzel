@@ -97,11 +97,15 @@ function hasActiveGeofence(workSite: WorkSiteGeofence | null): workSite is WorkS
 }
 
 /**
- * GPS pour un pointage. Si périmètre actif : position obligatoire ET à l'intérieur du cercle.
+ * GPS pour un pointage.
+ * - Arrivée (requireInside: true) : position obligatoire ET à l'intérieur du cercle si périmètre actif.
+ * - Départ (requireInside: false) : toujours autorisé ; enregistre si l'employé est dedans ou dehors.
  */
 export async function resolvePunchGeolocation(
-  workSite: WorkSiteGeofence | null
+  workSite: WorkSiteGeofence | null,
+  options?: { requireInside?: boolean }
 ): Promise<PunchGeoCols | 'blocked' | 'outside'> {
+  const requireInside = options?.requireInside !== false;
   const empty: PunchGeoCols = {
     lat: null,
     lng: null,
@@ -124,19 +128,19 @@ export async function resolvePunchGeolocation(
     const inside = isInsideGeofence(
       p.lat,
       p.lng,
-      workSite.lat,
-      workSite.lng,
-      workSite.radiusM
+      workSite!.lat,
+      workSite!.lng,
+      workSite!.radiusM
     );
-    if (!inside) return 'outside';
+    if (!inside && requireInside) return 'outside';
     return {
       lat: p.lat,
       lng: p.lng,
       accuracy_m: p.accuracyM,
-      inside_geofence: true,
+      inside_geofence: inside,
     };
   } catch {
-    return fenceActive ? 'blocked' : empty;
+    return fenceActive && requireInside ? 'blocked' : empty;
   }
 }
 

@@ -261,19 +261,12 @@ export default function EmployeeTimesheetsPage() {
     if (!employeeId || !todayCtx?.punch) return;
 
     setClockOutLoading(true);
-    const geo = await resolvePunchGeolocation(workSiteFence);
-    if (geo === 'blocked') {
-      toast.error(
-        'Autorisez la géolocalisation pour terminer (périmètre actif).'
-      );
-      setClockOutLoading(false);
-      return;
-    }
-    if (geo === 'outside') {
-      toast.error('Vous devez être sur le lieu de travail pour terminer.');
-      setClockOutLoading(false);
-      return;
-    }
+    // Départ : autorisé même hors périmètre (GPS enregistré si disponible)
+    const geo = await resolvePunchGeolocation(workSiteFence, { requireInside: false });
+    const geoData =
+      geo === 'blocked' || geo === 'outside'
+        ? { lat: null, lng: null, accuracy_m: null, inside_geofence: null }
+        : geo;
 
     const supabase = createClient();
     const now = new Date().toISOString();
@@ -281,10 +274,10 @@ export default function EmployeeTimesheetsPage() {
       .from('time_declarations')
       .update({
         clock_out_at: now,
-        clock_out_lat: geo.lat,
-        clock_out_lng: geo.lng,
-        clock_out_accuracy_m: geo.accuracy_m,
-        clock_out_inside_geofence: geo.inside_geofence,
+        clock_out_lat: geoData.lat,
+        clock_out_lng: geoData.lng,
+        clock_out_accuracy_m: geoData.accuracy_m,
+        clock_out_inside_geofence: geoData.inside_geofence,
         pause_15min: pause15min,
         had_snack: hadSnack,
         ate_work_food: ateWorkFood,
