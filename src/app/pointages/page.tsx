@@ -6,7 +6,6 @@ import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import {
   CheckCircle2,
-  XCircle,
   ChevronDown,
   ChevronUp,
   RefreshCw,
@@ -40,7 +39,7 @@ import {
   adminCanEditPunch,
 } from '@/lib/timePunches';
 
-type ReviewTab = 'action' | 'approved' | 'rejected' | 'in_progress';
+type ReviewTab = 'action' | 'approved' | 'in_progress';
 
 interface PunchWithEmployee extends TimePunchRow {
   employees: {
@@ -64,18 +63,6 @@ async function syncScheduleFromApproved(
       validated_end: end,
       is_modified: true,
     })
-    .eq('employee_id', employeeId)
-    .eq('date', date);
-}
-
-async function clearScheduleValidated(
-  supabase: ReturnType<typeof createClient>,
-  employeeId: string,
-  date: string
-) {
-  await supabase
-    .from('schedule_entries')
-    .update({ validated_start: null, validated_end: null })
     .eq('employee_id', employeeId)
     .eq('date', date);
 }
@@ -389,12 +376,12 @@ interface PunchRowProps {
   punch: PunchWithEmployee;
   onRefresh: () => void;
   onModifyClick: (p: PunchWithEmployee) => void;
+  /** En service : affichage seul, sans boutons d’action */
+  readOnly?: boolean;
 }
 
-function PunchRow({ punch, onRefresh, onModifyClick }: PunchRowProps) {
+function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const [rejectNote, setRejectNote] = useState('');
-  const [showReject, setShowReject] = useState(false);
   const [acting, setActing] = useState(false);
 
   const emp = punch.employees;
@@ -412,9 +399,9 @@ function PunchRow({ punch, onRefresh, onModifyClick }: PunchRowProps) {
     punch.clock_out_inside_geofence === false;
 
   const canEdit = adminCanEditPunch(punch);
-  const canReject = punch.status !== 'rejected' && punch.status !== 'approved';
   const isAwaitingReview = ADMIN_ACTION_STATUSES.includes(punch.status);
   const isApproved = punch.status === 'approved';
+  const showActions = !readOnly && canEdit && isAwaitingReview;
   const expandable = !isApproved;
 
   const handleQuickValidate = async () => {
@@ -454,34 +441,6 @@ function PunchRow({ punch, onRefresh, onModifyClick }: PunchRowProps) {
     void usePlanningStore.getState().loadData();
     toast.success('Pointage validé — planning mis à jour');
     setActing(false);
-    onRefresh();
-  };
-
-  const handleReject = async () => {
-    if (!rejectNote.trim()) {
-      toast.error('Motif de refus requis.');
-      return;
-    }
-    setActing(true);
-    const supabase = createClient();
-    const { error } = await supabase
-      .from('time_declarations')
-      .update({
-        status: 'rejected',
-        admin_note: rejectNote.trim(),
-        reviewed_at: new Date().toISOString(),
-      })
-      .eq('id', punch.id);
-    if (error) {
-      toast.error('Erreur lors du refus.');
-      setActing(false);
-      return;
-    }
-    await clearScheduleValidated(supabase, punch.employee_id, punch.date);
-    void usePlanningStore.getState().loadData();
-    toast.success('Pointage refusé');
-    setActing(false);
-    setShowReject(false);
     onRefresh();
   };
 
@@ -580,100 +539,43 @@ function PunchRow({ punch, onRefresh, onModifyClick }: PunchRowProps) {
 
           {punch.admin_note && (
             <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-              Motif admin : {punch.admin_note}
+              Note admin : {punch.admin_note}
             </p>
           )}
 
-          <div className="flex flex-wrap gap-2">
-            {canEdit && isAwaitingReview && (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-indigo-200 text-indigo-700 hover:bg-indigo-50"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onModifyClick(punch);
-                  }}
-                >
-                  <Pencil className="w-3.5 h-3.5 mr-1" />
-                  Modifier
-                </Button>
-                <Button
-                  size="sm"
-                  className="bg-emerald-600 hover:bg-emerald-700"
-                  disabled={acting}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleQuickValidate();
-                  }}
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                  Valider
-                </Button>
-              </>
-            )}
-            {canEdit && !isAwaitingReview && (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-indigo-200 text-indigo-700 hover:bg-indigo-50"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onModifyClick(punch);
-                  }}
-                >
-                  <Pencil className="w-3.5 h-3.5 mr-1" />
-                  Modifier
-                </Button>
-                <Button
-                  size="sm"
-                  className="bg-emerald-600 hover:bg-emerald-700"
-                  disabled={acting}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleQuickValidate();
-                  }}
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                  Valider
-                </Button>
-              </>
-            )}
-            {canReject && (
+          {showActions && (
+            <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
                 variant="outline"
-                className="text-red-600 border-red-200 hover:bg-red-50"
+                className="border-indigo-200 text-indigo-700 hover:bg-indigo-50"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setShowReject((v) => !v);
+                  onModifyClick(punch);
                 }}
               >
-                <XCircle className="w-3.5 h-3.5 mr-1" />
-                Refuser
+                <Pencil className="w-3.5 h-3.5 mr-1" />
+                Modifier
               </Button>
-            )}
-          </div>
-
-          {showReject && (
-            <div className="space-y-2">
-              <textarea
-                value={rejectNote}
-                onChange={(e) => setRejectNote(e.target.value)}
-                placeholder="Motif du refus…"
-                className="w-full min-h-[72px] px-3 py-2 rounded-xl border border-slate-200 text-sm"
-              />
               <Button
                 size="sm"
-                variant="destructive"
+                className="bg-emerald-600 hover:bg-emerald-700"
                 disabled={acting}
-                onClick={() => void handleReject()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleQuickValidate();
+                }}
               >
-                Confirmer le refus
+                <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                Valider
               </Button>
             </div>
+          )}
+
+          {readOnly && (
+            <p className="text-xs text-slate-400 italic">
+              En cours de service — modification possible une fois la journée terminée.
+            </p>
           )}
         </div>
       )}
@@ -755,7 +657,6 @@ export default function PointagesAdminPage() {
         .length,
       in_progress: punches.filter((p) => p.status === 'in_progress').length,
       approved: punches.filter((p) => p.status === 'approved').length,
-      rejected: punches.filter((p) => p.status === 'rejected').length,
       geoIssue: punches.filter(
         (p) =>
           p.clock_in_inside_geofence === false ||
@@ -769,14 +670,13 @@ export default function PointagesAdminPage() {
     { key: 'action', label: 'À traiter', count: counts.action },
     { key: 'in_progress', label: 'En service', count: counts.in_progress },
     { key: 'approved', label: 'Approuvés', count: counts.approved },
-    { key: 'rejected', label: 'Refusés', count: counts.rejected },
   ];
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
       <Header
         title="Pointages"
-        subtitle="Validez ou modifiez les heures pointées par vos employés"
+        subtitle="Validez ou modifiez les heures pointées — les journées en cours sont en lecture seule"
       />
 
       <div className="flex-1 max-w-4xl mx-auto w-full p-6 space-y-5">
@@ -850,6 +750,7 @@ export default function PointagesAdminPage() {
               <PunchRow
                 key={p.id}
                 punch={p}
+                readOnly={tab === 'in_progress'}
                 onRefresh={() => void fetchAll(true)}
                 onModifyClick={setEditTarget}
               />

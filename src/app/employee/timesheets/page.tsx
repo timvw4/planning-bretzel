@@ -415,7 +415,7 @@ export default function EmployeeTimesheetsPage() {
                 ) : (
                   <LogIn className="w-4 h-4" />
                 )}
-                Je commence
+                Début de travail
               </button>
             )}
 
@@ -427,7 +427,7 @@ export default function EmployeeTimesheetsPage() {
                 className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm transition-colors disabled:opacity-60"
               >
                 <LogOut className="w-4 h-4" />
-                Je termine
+                Fin de travail
               </button>
             )}
 

@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { Loader2, Calendar, ClipboardList, Clock, LogOut, Building2 } from 'lucide-react';
+import { Loader2, Calendar, ClipboardList, Clock, LogOut, Building2, History } from 'lucide-react';
 import Link from 'next/link';
 import { Toaster } from 'react-hot-toast';
+import { GeolocationOnboardingDialog } from '@/components/employee/GeolocationOnboardingDialog';
+import { hasCompletedGeoOnboarding, markGeoOnboardingComplete } from '@/lib/employeeGeolocationOnboarding';
 
 export default function EmployeeLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -13,6 +15,8 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
   const [loading, setLoading] = useState(true);
   const [employeeName, setEmployeeName] = useState('');
   const [initials, setInitials] = useState('?');
+  const [employeeId, setEmployeeId] = useState<string | null>(null);
+  const [showGeoOnboarding, setShowGeoOnboarding] = useState(false);
 
   // Enregistrement du Service Worker pour la PWA
   useEffect(() => {
@@ -55,6 +59,8 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
         return;
       }
 
+      setEmployeeId(profile.employee_id);
+
       // Récupérer le nom de l'employé lié au compte
       if (profile.employee_id) {
         const { data: employee } = await supabase
@@ -83,6 +89,32 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
     });
   }, [router]);
 
+  // Demande de localisation une seule fois à la première ouverture (par employé / appareil)
+  useEffect(() => {
+    if (loading || !employeeId) return;
+    if (hasCompletedGeoOnboarding(employeeId)) return;
+
+    async function checkAndPrompt() {
+      // Déjà autorisé dans le navigateur → pas besoin de redemander
+      if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+        try {
+          const status = await navigator.permissions.query({
+            name: 'geolocation' as PermissionName,
+          });
+          if (status.state === 'granted') {
+            markGeoOnboardingComplete(employeeId!);
+            return;
+          }
+        } catch {
+          // Permissions API indisponible (ex. Safari) → afficher la fenêtre
+        }
+      }
+      setShowGeoOnboarding(true);
+    }
+
+    void checkAndPrompt();
+  }, [loading, employeeId]);
+
   const handleLogout = async () => {
     const supabase = createClient();
     await supabase.auth.signOut();
@@ -106,6 +138,7 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
     { href: '/employee', label: 'Mon planning', icon: Calendar },
     { href: '/employee/availability', label: 'Mes disponibilités', icon: ClipboardList },
     { href: '/employee/timesheets', label: 'Pointage', icon: Clock },
+    { href: '/employee/historique', label: 'Historique', icon: History },
   ];
 
   return (
@@ -204,6 +237,14 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
           },
         }}
       />
+
+      {employeeId && (
+        <GeolocationOnboardingDialog
+          open={showGeoOnboarding}
+          employeeId={employeeId}
+          onComplete={() => setShowGeoOnboarding(false)}
+        />
+      )}
     </div>
   );
 }

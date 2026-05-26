@@ -7,16 +7,14 @@ import {
   getDay, isToday, addMonths, isPast, parseISO,
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { ChevronLeft, ChevronRight, Lock, CheckCircle, Clock, XCircle, Send, AlertTriangle, Info } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Lock, CheckCircle, Clock, XCircle, Send, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { AvailabilityDay } from '@/lib/types';
 import {
   formatWorkDaysSummary,
   getEffectiveAvailabilityStatus,
   getNextWorkDayAvailabilityStatus,
-  getPositionLabel,
   isEmployeeWorkDay,
-  parseEmployeePosition,
 } from '@/lib/employeePosition';
 
 type AvailabilityStatus = 'available' | 'unavailable' | 'preferred';
@@ -81,7 +79,6 @@ export default function EmployeeAvailabilityPage() {
   const [employeeId, setEmployeeId] = useState<string | null>(null);
   /** Jours habituels définis par l’admin dans la fiche employé */
   const [workDays, setWorkDays] = useState<AvailabilityDay[]>([]);
-  const [employeePositionLabel, setEmployeePositionLabel] = useState('');
   const [availabilities, setAvailabilities] = useState<Map<string, AvailabilityEntry>>(new Map());
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
@@ -131,15 +128,12 @@ export default function EmployeeAvailabilityPage() {
       supabase.from('availability_unlock_requests').select('id, status')
         .eq('employee_id', employeeId).eq('month_key', monthKey)
         .order('requested_at', { ascending: false }).limit(1).maybeSingle(),
-      supabase.from('employees').select('availability, position')
+      supabase.from('employees').select('availability')
         .eq('id', employeeId).maybeSingle(),
     ]);
 
     const parsedWorkDays = (empRow?.availability ?? []) as AvailabilityDay[];
     setWorkDays(parsedWorkDays);
-    if (empRow?.position) {
-      setEmployeePositionLabel(getPositionLabel(parseEmployeePosition(empRow.position)));
-    }
 
     const map = new Map<string, AvailabilityEntry>();
     (avails ?? []).forEach((row) =>
@@ -332,30 +326,6 @@ export default function EmployeeAvailabilityPage() {
             <Send className="w-3.5 h-3.5" />
             Nouvelle demande
           </button>
-        </div>
-      )}
-
-      {/* ── Jours habituels (fiche admin) ─────────────────────── */}
-      {workDays.length > 0 ? (
-        <div className="flex items-start gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 animate-stagger-1">
-          <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-          <div className="text-xs text-indigo-900 leading-relaxed">
-            <p className="font-semibold">
-              Vos jours habituels{employeePositionLabel ? ` (${employeePositionLabel})` : ''}
-            </p>
-            <p className="text-indigo-700 mt-0.5">
-              {workDaysSummary} — définis par votre responsable. Seuls ces jours sont modifiables.
-              Par défaut vous êtes <strong>disponible</strong> ; indiquez les exceptions (préféré ou
-              indisponible).
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 animate-stagger-1">
-          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-800">
-            Aucun jour habituel n&apos;est configuré sur votre fiche. Contactez votre responsable.
-          </p>
         </div>
       )}
 
