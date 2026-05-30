@@ -24,6 +24,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { usePlanningStore } from '@/lib/store';
 import { PublicHoliday } from '@/lib/types';
+import {
+  SWISS_DEFAULT_MAX_WEEKLY_HOURS,
+  SWISS_LEGAL_MAX_WEEKLY_HOURS,
+  SWISS_MIN_REST_HOURS,
+} from '@/lib/swissLabor';
 
 const WorkSiteMapPicker = dynamic(
   () => import('@/components/settings/WorkSiteMapPicker').then((mod) => mod.WorkSiteMapPicker),
@@ -76,20 +81,23 @@ function ToggleRow({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between py-1">
-      <div>
+    <div className="flex items-start justify-between gap-4 py-1">
+      <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-slate-800">{label}</p>
         <p className="text-xs text-slate-400 mt-0.5">{description}</p>
       </div>
       <button
+        type="button"
+        role="switch"
+        aria-checked={value}
         onClick={() => onChange(!value)}
-        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${
           value ? 'bg-indigo-600' : 'bg-slate-200'
         }`}
       >
         <span
-          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-            value ? 'translate-x-6' : 'translate-x-1'
+          className={`absolute top-1 left-1 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+            value ? 'translate-x-5' : 'translate-x-0'
           }`}
         />
       </button>
@@ -142,6 +150,7 @@ export default function SettingsPage() {
     overtime: true,
     unavailable: true,
     lowRest: true,
+    geofencePunch: true,
   };
   const [notifications, setNotifications] = useState(
     settings.notifications ?? defaultNotifications
@@ -274,6 +283,7 @@ export default function SettingsPage() {
                 onChange={(e) => updateSettings({ timezone: e.target.value })}
                 className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
+                <option value="Europe/Zurich">Europe/Zurich</option>
                 <option value="Europe/Paris">Europe/Paris</option>
                 <option value="Europe/London">Europe/London</option>
                 <option value="Europe/Berlin">Europe/Berlin</option>
@@ -300,33 +310,37 @@ export default function SettingsPage() {
           title="Règles de planning"
           description="Définissez les contraintes et limites de travail"
         >
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Repos minimum entre shifts (h)</Label>
-              <Input
-                type="number"
-                min={8}
-                max={24}
-                value={settings.minRestHours}
-                onChange={(e) =>
-                  updateSettings({ minRestHours: parseInt(e.target.value) || 11 })
-                }
-              />
-              <p className="text-[11px] text-slate-400">Légalement requis : 11h min</p>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Max heures / semaine</Label>
-              <Input
-                type="number"
-                min={35}
-                max={60}
-                value={settings.maxWeeklyHours}
-                onChange={(e) =>
-                  updateSettings({ maxWeeklyHours: parseInt(e.target.value) || 48 })
-                }
-              />
-              <p className="text-[11px] text-slate-400">Légal français : 48h max</p>
-            </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+            <Label className="min-h-10 leading-snug flex items-end">
+              Repos minimum entre shifts (h)
+            </Label>
+            <Label className="min-h-10 leading-snug flex items-end">
+              Max heures / semaine
+            </Label>
+            <Input
+              type="number"
+              min={8}
+              max={24}
+              value={settings.minRestHours}
+              onChange={(e) =>
+                updateSettings({ minRestHours: parseInt(e.target.value, 10) || SWISS_MIN_REST_HOURS })
+              }
+            />
+            <Input
+              type="number"
+              min={20}
+              max={SWISS_LEGAL_MAX_WEEKLY_HOURS}
+              value={settings.maxWeeklyHours}
+              onChange={(e) =>
+                updateSettings({
+                  maxWeeklyHours: parseInt(e.target.value, 10) || SWISS_DEFAULT_MAX_WEEKLY_HOURS,
+                })
+              }
+            />
+            <p className="text-[11px] text-slate-400">Légalement requis : {SWISS_MIN_REST_HOURS} h min (LTr)</p>
+            <p className="text-[11px] text-slate-400">
+              Max. légal Suisse : {SWISS_LEGAL_MAX_WEEKLY_HOURS} h (commerce / artisanat)
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -419,6 +433,12 @@ export default function SettingsPage() {
               description={`Alerte si moins de ${settings.minRestHours}h entre deux shifts`}
               value={notifications.lowRest}
               onChange={(v) => setNotifications((n) => ({ ...n, lowRest: v }))}
+            />
+            <ToggleRow
+              label="Pointage hors périmètre GPS"
+              description="Alerte quand un employé pointe son arrivée ou son départ hors zone"
+              value={notifications.geofencePunch ?? true}
+              onChange={(v) => setNotifications((n) => ({ ...n, geofencePunch: v }))}
             />
           </div>
         </SettingSection>
@@ -551,7 +571,7 @@ export default function SettingsPage() {
       <div className="mx-6 mb-6 p-4 bg-slate-50 rounded-2xl border border-slate-100">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-700">Planning Bretzel V1.0.0</p>
+            <p className="text-xs font-semibold text-slate-700">Planning Bretzel V0.1.2</p>
             <p className="text-xs text-slate-400 mt-0.5">
               Logiciel professionnel de gestion de planning — Léonard Bretzel
             </p>

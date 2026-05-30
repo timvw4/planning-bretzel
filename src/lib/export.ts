@@ -3,10 +3,36 @@
 // ============================================================
 
 import { Employee, Shift, ScheduleEntry } from './types';
-import { formatHours } from './utils';
+import { formatHours, calculateShiftDuration } from './utils';
 import { getPositionLabel } from './employeePosition';
 import { format, eachDayOfInterval, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
+
+function getExportCellContent(
+  entry: ScheduleEntry | undefined,
+  shift: Shift | undefined,
+  realPlanning: boolean
+): string {
+  if (!entry || !shift) return '';
+  if (realPlanning) {
+    if (!entry.validatedStart || !entry.validatedEnd) return '';
+    return `${entry.validatedStart}–${entry.validatedEnd}`;
+  }
+  return shift.shortName;
+}
+
+function getExportEntryHours(
+  entry: ScheduleEntry | undefined,
+  shift: Shift | undefined,
+  realPlanning: boolean
+): number {
+  if (!entry || !shift) return 0;
+  if (realPlanning) {
+    if (!entry.validatedStart || !entry.validatedEnd) return 0;
+    return calculateShiftDuration(entry.validatedStart, entry.validatedEnd);
+  }
+  return shift.durationHours ?? 0;
+}
 
 // ---- EXPORT EXCEL ----
 export async function exportToExcel(
@@ -18,7 +44,8 @@ export async function exportToExcel(
   companyName: string,
   // monthRef : premier jour du mois de référence (pour le filtre des inactifs).
   // Utile quand periodStart est étendu aux semaines complètes (peut être dans le mois précédent).
-  monthRef?: string
+  monthRef?: string,
+  realPlanning = false
 ): Promise<void> {
   const XLSX = await import('xlsx');
 
@@ -40,16 +67,15 @@ export async function exportToExcel(
       const shiftCells = days.map((day) => {
         const dateStr = format(day, 'yyyy-MM-dd');
         const entry = entries.find((e) => e.employeeId === emp.id && e.date === dateStr);
-        if (!entry) return '';
-        const shift = shiftMap.get(entry.shiftId);
-        return shift ? shift.shortName : '';
+        const shift = entry ? shiftMap.get(entry.shiftId) : undefined;
+        return getExportCellContent(entry, shift, realPlanning);
       });
 
       const totalHours = days.reduce((sum, day) => {
         const dateStr = format(day, 'yyyy-MM-dd');
         const entry = entries.find((e) => e.employeeId === emp.id && e.date === dateStr);
-        const shift = entry ? shiftMap.get(entry.shiftId) : null;
-        return sum + (shift?.durationHours ?? 0);
+        const shift = entry ? shiftMap.get(entry.shiftId) : undefined;
+        return sum + getExportEntryHours(entry, shift, realPlanning);
       }, 0);
 
       return [`${emp.firstName} ${emp.lastName}`, getPositionLabel(emp.position), ...shiftCells, formatHours(totalHours)];
@@ -66,17 +92,18 @@ export async function exportToExcel(
   ];
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Planning');
+  XLSX.utils.book_append_sheet(wb, ws, realPlanning ? 'Planning réel' : 'Planning');
 
   // Métadonnées
   wb.Props = {
-    Title: `Planning ${companyName}`,
-    Subject: `Planning du ${periodStart} au ${periodEnd}`,
+    Title: `${realPlanning ? 'Planning réel' : 'Planning'} ${companyName}`,
+    Subject: `${realPlanning ? 'Planning réel' : 'Planning'} du ${periodStart} au ${periodEnd}`,
     Author: companyName,
     CreatedDate: new Date(),
   };
 
-  XLSX.writeFile(wb, `planning-${periodStart}-${periodEnd}.xlsx`);
+  const filePrefix = realPlanning ? 'planning-reel' : 'planning';
+  XLSX.writeFile(wb, `${filePrefix}-${periodStart}-${periodEnd}.xlsx`);
 }
 
 // ---- EXPORT PDF ----
@@ -90,7 +117,8 @@ export async function exportToPDF(
   // monthRef : premier jour du mois de référence pour le titre et le filtre des inactifs.
   monthRef?: string,
   // holidays : liste des jours fériés pour mise en évidence dans le PDF
-  holidays?: { date: string; name: string }[]
+  holidays?: { date: string; name: string }[],
+  realPlanning = false
 ): Promise<void> {
   const { jsPDF } = await import('jspdf');
   const autoTable = (await import('jspdf-autotable')).default;
@@ -155,16 +183,15 @@ export async function exportToPDF(
     const shiftCells = days.map((day) => {
       const dateStr = format(day, 'yyyy-MM-dd');
       const entry = entries.find((e) => e.employeeId === emp.id && e.date === dateStr);
-      if (!entry) return '';
-      const shift = shiftMap.get(entry.shiftId);
-      return shift ? shift.shortName : '';
+      const shift = entry ? shiftMap.get(entry.shiftId) : undefined;
+      return getExportCellContent(entry, shift, realPlanning);
     });
 
     const totalHours = days.reduce((sum, day) => {
       const dateStr = format(day, 'yyyy-MM-dd');
       const entry = entries.find((e) => e.employeeId === emp.id && e.date === dateStr);
-      const shift = entry ? shiftMap.get(entry.shiftId) : null;
-      return sum + (shift?.durationHours ?? 0);
+      const shift = entry ? shiftMap.get(entry.shiftId) : undefined;
+      return sum + getExportEntryHours(entry, shift, realPlanning);
     }, 0);
 
     return [`${emp.firstName} ${emp.lastName}`, ...shiftCells, formatHours(totalHours)];
@@ -190,7 +217,8 @@ export async function exportToPDF(
   doc.setTextColor(100);
   const monthLabel = format(parseISO(monthRef ?? periodStart), 'MMMM yyyy', { locale: fr });
   const periodLabel = `  -  ${format(parseISO(periodStart), 'd MMM', { locale: fr })} au ${format(parseISO(periodEnd), 'd MMM yyyy', { locale: fr })}`;
-  doc.text(`Planning ${monthLabel}${periodLabel}`, MARGIN + 32, 10);
+  const planningTitle = realPlanning ? 'Planning réel' : 'Planning';
+  doc.text(`${planningTitle} ${monthLabel}${periodLabel}`, MARGIN + 32, 10);
   doc.setTextColor(0);
 
   // ── Tableau unique ────────────────────────────────────────
@@ -258,9 +286,19 @@ export async function exportToPDF(
 
         // Shift assigné : couleur du shift
         if (data.section === 'body') {
-          const cellText = String(data.cell.raw || '');
-          const shift = shifts.find((s) => s.shortName === cellText);
-          if (shift) {
+          const emp = activeEmployees[data.row.index];
+          const day = days[col - 1];
+          const dateStr = format(day, 'yyyy-MM-dd');
+          const entry = emp
+            ? entries.find((e) => e.employeeId === emp.id && e.date === dateStr)
+            : undefined;
+          const shift = entry ? shiftMap.get(entry.shiftId) : undefined;
+          const hasCell =
+            realPlanning
+              ? Boolean(entry?.validatedStart && entry?.validatedEnd && shift)
+              : Boolean(data.cell.raw && shift);
+
+          if (hasCell && shift) {
             data.cell.styles.fillColor = parseHex(shift.color);
             data.cell.styles.textColor = parseHex(shift.textColor);
             data.cell.styles.fontStyle = 'bold';
@@ -341,7 +379,8 @@ export async function exportToPDF(
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `planning-${periodStart}-${periodEnd}.pdf`;
+  const filePrefix = realPlanning ? 'planning-reel' : 'planning';
+  a.download = `${filePrefix}-${periodStart}-${periodEnd}.pdf`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

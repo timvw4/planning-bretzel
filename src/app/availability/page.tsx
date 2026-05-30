@@ -8,26 +8,32 @@ import {
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import {
-  ChevronLeft, ChevronRight, Users, CheckCircle, Star, XCircle,
+  ChevronLeft, ChevronRight, Users, Sun,
   Lock, Check, X, Clock, AlertCircle,
 } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import toast from 'react-hot-toast';
+import type { AvailabilityDay } from '@/lib/types';
+import { formatWorkDaysSummary, isEmployeeWorkDay, normalizeStoredAvailabilityStatus } from '@/lib/employeePosition';
+import { AvailabilityStatusIcon } from '@/components/availability/AvailabilityStatusIcon';
 
-type AvailabilityStatus = 'available' | 'preferred' | 'unavailable';
+/** Seuls les changements par rapport au défaut employé sont enregistrés en base. */
+type StoredAvailabilityStatus = 'vacation' | 'unavailable';
 type ViewTab = 'calendar' | 'requests';
+type EmployeeFilter = 'all' | 'validated' | 'not_validated' | 'with_exceptions';
 
 interface Employee {
   id: string;
   firstName: string;
   lastName: string;
   color: string;
+  workDays: AvailabilityDay[];
 }
 
 interface AvailabilityEntry {
   employeeId: string;
   date: string;
-  status: AvailabilityStatus;
+  status: StoredAvailabilityStatus;
 }
 
 interface UnlockRequest {
@@ -39,10 +45,12 @@ interface UnlockRequest {
   requestedAt: string;
 }
 
-const STATUS_CONFIG: Record<AvailabilityStatus, { icon: React.ReactNode; bg: string; text: string; label: string }> = {
-  available:   { icon: <CheckCircle className="w-3 h-3" />, bg: '#DCFCE7', text: '#15803D', label: 'Disponible' },
-  preferred:   { icon: <Star className="w-3 h-3" />,        bg: '#FEF9C3', text: '#A16207', label: 'Préféré' },
-  unavailable: { icon: <XCircle className="w-3 h-3" />,     bg: '#FEE2E2', text: '#DC2626', label: 'Indisponible' },
+const EXCEPTION_CONFIG: Record<
+  StoredAvailabilityStatus,
+  { bg: string; text: string; label: string }
+> = {
+  vacation: { bg: '#DBEAFE', text: '#1D4ED8', label: 'Vacances' },
+  unavailable: { bg: '#FEE2E2', text: '#DC2626', label: 'Indisponible' },
 };
 
 export default function AvailabilityAdminPage() {
@@ -53,7 +61,7 @@ export default function AvailabilityAdminPage() {
   const [unlockRequests, setUnlockRequests] = useState<UnlockRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<ViewTab>('calendar');
-  const [filterStatus, setFilterStatus] = useState<AvailabilityStatus | 'all'>('all');
+  const [employeeFilter, setEmployeeFilter] = useState<EmployeeFilter>('all');
   const [processingId, setProcessingId] = useState<string | null>(null);
 
   const monthKey = format(currentDate, 'yyyy-MM');
@@ -66,8 +74,8 @@ export default function AvailabilityAdminPage() {
 
     const [{ data: emps }, { data: avails }, { data: validations }, { data: pendingReqs }] =
       await Promise.all([
-      supabase.from('employees').select('id, first_name, last_name, color').eq('is_active', true).order('first_name'),
-      supabase.from('availability_requests').select('employee_id, date, status').gte('date', start).lte('date', end),
+      supabase.from('employees').select('id, first_name, last_name, color, availability').eq('is_active', true).order('first_name'),
+      supabase.from('availability_requests').select('employee_id, date, status').gte('date', start).lte('date', end).in('status', ['vacation', 'unavailable', 'preferred']),
       supabase.from('availability_validations').select('employee_id').eq('month_key', monthKey),
       // Toutes les demandes en attente (tous mois) — aligné avec la pastille du menu
       supabase.from('availability_unlock_requests').select('id, employee_id, month_key, reason, status, requested_at')
@@ -75,8 +83,28 @@ export default function AvailabilityAdminPage() {
         .order('requested_at', { ascending: false }),
     ]);
 
-    setEmployees((emps ?? []).map((e) => ({ id: e.id, firstName: e.first_name, lastName: e.last_name ?? '', color: e.color })));
-    setAvailabilities((avails ?? []).map((a) => ({ employeeId: a.employee_id, date: a.date, status: a.status as AvailabilityStatus })));
+    setEmployees(
+      (emps ?? []).map((e) => ({
+        id: e.id,
+        firstName: e.first_name,
+        lastName: e.last_name ?? '',
+        color: e.color,
+        workDays: (e.availability ?? []) as AvailabilityDay[],
+      }))
+    );
+    setAvailabilities(
+      (avails ?? [])
+        .map((a) => {
+          const status = normalizeStoredAvailabilityStatus(a.status);
+          if (status !== 'vacation' && status !== 'unavailable') return null;
+          return {
+            employeeId: a.employee_id,
+            date: a.date,
+            status,
+          };
+        })
+        .filter((a): a is AvailabilityEntry => a != null)
+    );
     setValidatedEmployeeIds(new Set((validations ?? []).map((v) => v.employee_id)));
     setUnlockRequests((pendingReqs ?? []).map((r) => ({
       id: r.id, employeeId: r.employee_id, monthKey: r.month_key,
@@ -120,32 +148,44 @@ export default function AvailabilityAdminPage() {
   const monthEnd = endOfMonth(currentDate);
   const days = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
-  const availMap = new Map<string, Map<string, AvailabilityStatus>>();
+  const availMap = new Map<string, Map<string, StoredAvailabilityStatus>>();
   availabilities.forEach((a) => {
     if (!availMap.has(a.employeeId)) availMap.set(a.employeeId, new Map());
     availMap.get(a.employeeId)!.set(a.date, a.status);
   });
 
-  const totalSubmitted = new Set(availabilities.map((a) => a.employeeId)).size;
   const totalValidated = validatedEmployeeIds.size;
-  const totalAvailable = availabilities.filter((a) => a.status === 'available').length;
+  const totalNotValidated = employees.length - totalValidated;
+  const totalExceptions = availabilities.length;
+  const totalVacation = availabilities.filter((a) => a.status === 'vacation').length;
   const totalUnavailable = availabilities.filter((a) => a.status === 'unavailable').length;
   const pendingRequests = unlockRequests.filter((r) => r.status === 'pending');
+
+  const employeeHasExceptions = (empId: string) => {
+    const m = availMap.get(empId);
+    return m != null && m.size > 0;
+  };
+
+  const filteredEmployees = employees.filter((e) => {
+    const isValidated = validatedEmployeeIds.has(e.id);
+    switch (employeeFilter) {
+      case 'validated':
+        return isValidated;
+      case 'not_validated':
+        return !isValidated;
+      case 'with_exceptions':
+        return employeeHasExceptions(e.id);
+      default:
+        return true;
+    }
+  });
+
+  const employeesNotValidated = employees.filter((e) => !validatedEmployeeIds.has(e.id));
 
   const goToRequestMonth = (requestMonthKey: string) => {
     const [y, m] = requestMonthKey.split('-').map(Number);
     if (y && m) setCurrentDate(new Date(y, m - 1, 1));
   };
-
-  const filteredEmployees = filterStatus === 'all'
-    ? employees
-    : employees.filter((e) => {
-        const empMap = availMap.get(e.id);
-        if (!empMap) return false;
-        return [...empMap.values()].some((s) => s === filterStatus);
-      });
-
-  const employeesWithNoData = employees.filter((e) => !availMap.has(e.id));
 
   const getEmployeeName = (id: string) => {
     const emp = employees.find((e) => e.id === id);
@@ -156,44 +196,51 @@ export default function AvailabilityAdminPage() {
     <div className="flex flex-col h-screen">
       <Header
         title="Disponibilités"
-        subtitle={`${totalSubmitted} soumission${totalSubmitted > 1 ? 's' : ''} · ${totalValidated} validé${totalValidated > 1 ? 's' : ''} · ${pendingRequests.length} demande${pendingRequests.length > 1 ? 's' : ''} en attente`}
+        subtitle={`${totalValidated} mois validé${totalValidated !== 1 ? 's' : ''} · ${totalExceptions} exception${totalExceptions !== 1 ? 's' : ''} · ${pendingRequests.length} demande${pendingRequests.length !== 1 ? 's' : ''} en attente`}
       />
 
       <div className="flex-1 overflow-auto p-6 space-y-5">
 
         {/* Stats */}
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-2xl border border-slate-100 p-4">
-            <div className="flex items-center gap-2 mb-2"><Users className="w-4 h-4 text-slate-400" />
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Soumissions</span></div>
-            <p className="text-2xl font-bold text-slate-800">{totalSubmitted}<span className="text-sm text-slate-400 font-normal">/{employees.length}</span></p>
-            <p className="text-xs text-slate-400 mt-0.5">employés ce mois</p>
+            <div className="flex items-center gap-2 mb-2">
+              <Lock className="w-4 h-4 text-indigo-400" />
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Validés</span>
+            </div>
+            <p className="text-2xl font-bold text-indigo-600">
+              {totalValidated}
+              <span className="text-sm text-slate-400 font-normal">/{employees.length}</span>
+            </p>
+            <p className="text-xs text-slate-400 mt-0.5">mois verrouillés par l&apos;employé</p>
           </div>
           <div className="bg-white rounded-2xl border border-slate-100 p-4">
-            <div className="flex items-center gap-2 mb-2"><Lock className="w-4 h-4 text-indigo-400" />
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Validés</span></div>
-            <p className="text-2xl font-bold text-indigo-600">{totalValidated}<span className="text-sm text-slate-400 font-normal">/{employees.length}</span></p>
-            <p className="text-xs text-slate-400 mt-0.5">mois verrouillés</p>
+            <div className="flex items-center gap-2 mb-2">
+              <Users className="w-4 h-4 text-slate-400" />
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">En attente</span>
+            </div>
+            <p className="text-2xl font-bold text-slate-700">{totalNotValidated}</p>
+            <p className="text-xs text-slate-400 mt-0.5">n&apos;ont pas encore validé</p>
           </div>
           <div className="bg-white rounded-2xl border border-slate-100 p-4">
-            <div className="flex items-center gap-2 mb-2"><CheckCircle className="w-4 h-4 text-green-500" />
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Disponibles</span></div>
-            <p className="text-2xl font-bold text-green-600">{totalAvailable}</p>
-            <p className="text-xs text-slate-400 mt-0.5">jours renseignés</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-slate-100 p-4">
-            <div className="flex items-center gap-2 mb-2"><XCircle className="w-4 h-4 text-red-400" />
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Indisponibles</span></div>
-            <p className="text-2xl font-bold text-red-500">{totalUnavailable}</p>
-            <p className="text-xs text-slate-400 mt-0.5">jours bloqués</p>
+            <div className="flex items-center gap-2 mb-2">
+              <Sun className="w-4 h-4 text-sky-500" />
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Exceptions</span>
+            </div>
+            <p className="text-2xl font-bold text-sky-600">{totalExceptions}</p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {totalVacation} vacance{totalVacation !== 1 ? 's' : ''} · {totalUnavailable} indispo
+            </p>
           </div>
           <div className={`rounded-2xl border p-4 ${pendingRequests.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-100'}`}>
             <div className="flex items-center gap-2 mb-2">
               <AlertCircle className={`w-4 h-4 ${pendingRequests.length > 0 ? 'text-amber-500' : 'text-slate-400'}`} />
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Demandes</span>
             </div>
-            <p className={`text-2xl font-bold ${pendingRequests.length > 0 ? 'text-amber-600' : 'text-slate-400'}`}>{pendingRequests.length}</p>
-            <p className="text-xs text-slate-400 mt-0.5">en attente</p>
+            <p className={`text-2xl font-bold ${pendingRequests.length > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+              {pendingRequests.length}
+            </p>
+            <p className="text-xs text-slate-400 mt-0.5">déverrouillage en attente</p>
           </div>
         </div>
 
@@ -235,11 +282,26 @@ export default function AvailabilityAdminPage() {
                   <ChevronRight className="w-4 h-4 text-slate-500" />
                 </button>
               </div>
-              <div className="flex items-center gap-1.5">
-                {(['all', 'available', 'preferred', 'unavailable'] as const).map((s) => (
-                  <button key={s} onClick={() => setFilterStatus(s)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${filterStatus === s ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
-                    {s === 'all' ? 'Tous' : STATUS_CONFIG[s].label}
+              <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                {(
+                  [
+                    ['all', 'Tous'],
+                    ['validated', 'Validés'],
+                    ['not_validated', 'Non validés'],
+                    ['with_exceptions', 'Avec exceptions'],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setEmployeeFilter(key)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${
+                      employeeFilter === key
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    }`}
+                  >
+                    {label}
                   </button>
                 ))}
               </div>
@@ -279,11 +341,11 @@ export default function AvailabilityAdminPage() {
                   </thead>
                   <tbody>
                     {filteredEmployees.map((emp) => {
-                      const empMap = availMap.get(emp.id) ?? new Map<string, AvailabilityStatus>();
+                      const empMap = availMap.get(emp.id) ?? new Map<string, StoredAvailabilityStatus>();
                       const isValidated = validatedEmployeeIds.has(emp.id);
-                      const availCount = [...empMap.values()].filter((s) => s === 'available').length;
+                      const vacationCount = [...empMap.values()].filter((s) => s === 'vacation').length;
                       const unavailCount = [...empMap.values()].filter((s) => s === 'unavailable').length;
-                      const preferredCount = [...empMap.values()].filter((s) => s === 'preferred').length;
+                      const workDaysLabel = formatWorkDaysSummary(emp.workDays);
 
                       return (
                         <tr key={emp.id} className="hover:bg-slate-50/50 transition-colors group">
@@ -295,6 +357,9 @@ export default function AvailabilityAdminPage() {
                               </div>
                               <div className="min-w-0 flex-1">
                                 <p className="text-xs font-semibold text-slate-700 truncate">{emp.firstName} {emp.lastName}</p>
+                                {workDaysLabel && (
+                                  <p className="text-[10px] text-slate-400 truncate">Habituel : {workDaysLabel}</p>
+                                )}
                               </div>
                               {isValidated && (
                                 <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">
@@ -306,15 +371,31 @@ export default function AvailabilityAdminPage() {
                           {days.map((day) => {
                             const dateStr = format(day, 'yyyy-MM-dd');
                             const status = empMap.get(dateStr);
-                            const cfg = status ? STATUS_CONFIG[status] : null;
+                            const cfg = status ? EXCEPTION_CONFIG[status] : null;
                             const isWE = isWeekend(day);
+                            const isWorkDay = isEmployeeWorkDay(day, emp.workDays);
                             return (
-                              <td key={dateStr}
-                                className={`w-9 h-9 border-b border-r border-slate-100 text-center ${isWE ? 'bg-slate-50/50' : ''}`}
-                                style={cfg ? { backgroundColor: cfg.bg } : {}}>
+                              <td
+                                key={dateStr}
+                                className={`w-9 h-9 border-b border-r border-slate-100 text-center ${
+                                  isWE ? 'bg-slate-50/50' : ''
+                                } ${!isWorkDay && !cfg ? 'bg-slate-100/40' : ''}`}
+                                style={cfg ? { backgroundColor: cfg.bg } : {}}
+                                title={
+                                  cfg
+                                    ? EXCEPTION_CONFIG[status!].label
+                                    : isWorkDay
+                                      ? 'Disponible par défaut (non affiché)'
+                                      : 'Hors jours habituels'
+                                }
+                              >
                                 {cfg && (
                                   <div className="flex items-center justify-center h-full" style={{ color: cfg.text }}>
-                                    {cfg.icon}
+                                    <AvailabilityStatusIcon
+                                      status={status!}
+                                      size={12}
+                                      strokeWidth={2.5}
+                                    />
                                   </div>
                                 )}
                               </td>
@@ -323,9 +404,15 @@ export default function AvailabilityAdminPage() {
                           <td className="sticky right-0 bg-white group-hover:bg-slate-50/50 border-b border-l border-slate-100 px-2 py-1">
                             {empMap.size > 0 ? (
                               <div className="flex flex-col gap-0.5 items-center">
-                                {availCount > 0 && <span className="text-[10px] font-bold text-green-600">{availCount}✓</span>}
-                                {preferredCount > 0 && <span className="text-[10px] font-bold text-yellow-600">{preferredCount}★</span>}
-                                {unavailCount > 0 && <span className="text-[10px] font-bold text-red-500">{unavailCount}✗</span>}
+                                {vacationCount > 0 && (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-sky-600">
+                                    {vacationCount}
+                                    <AvailabilityStatusIcon status="vacation" size={10} strokeWidth={2.5} />
+                                  </span>
+                                )}
+                                {unavailCount > 0 && (
+                                  <span className="text-[10px] font-bold text-red-500">{unavailCount}✗</span>
+                                )}
                               </div>
                             ) : (
                               <span className="text-[10px] text-slate-300 block text-center">—</span>
@@ -439,14 +526,14 @@ export default function AvailabilityAdminPage() {
           </div>
         )}
 
-        {/* Employés sans saisie */}
-        {activeTab === 'calendar' && employeesWithNoData.length > 0 && (
+        {/* Employés n'ayant pas validé */}
+        {activeTab === 'calendar' && employeesNotValidated.length > 0 && (
           <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4">
             <p className="text-xs font-bold text-amber-700 mb-2">
-              {employeesWithNoData.length} employé{employeesWithNoData.length > 1 ? 's' : ''} sans disponibilités ce mois
+              {employeesNotValidated.length} employé{employeesNotValidated.length > 1 ? 's' : ''} n&apos;ont pas encore validé ce mois
             </p>
             <div className="flex flex-wrap gap-2">
-              {employeesWithNoData.map((emp) => (
+              {employeesNotValidated.map((emp) => (
                 <div key={emp.id} className="flex items-center gap-1.5 bg-white rounded-xl px-2.5 py-1.5 border border-amber-100">
                   <div className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold text-white" style={{ backgroundColor: emp.color }}>
                     {emp.firstName[0]}
@@ -460,11 +547,18 @@ export default function AvailabilityAdminPage() {
 
         {/* Légende */}
         {activeTab === 'calendar' && (
-          <div className="flex items-center gap-4 px-1">
-            {Object.entries(STATUS_CONFIG).map(([status, cfg]) => (
+          <div className="flex flex-col gap-2 px-1 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
+            <p className="text-xs text-slate-500 w-full sm:w-auto">
+              Seules les exceptions (vacances / indisponible) sont affichées — les jours disponibles restent privés côté employé.
+            </p>
+            {Object.entries(EXCEPTION_CONFIG).map(([status, cfg]) => (
               <div key={status} className="flex items-center gap-1.5">
                 <div className="w-5 h-5 rounded-md flex items-center justify-center" style={{ backgroundColor: cfg.bg, color: cfg.text }}>
-                  {cfg.icon}
+                  <AvailabilityStatusIcon
+                    status={status}
+                    size={12}
+                    strokeWidth={2.5}
+                  />
                 </div>
                 <span className="text-xs text-slate-500">{cfg.label}</span>
               </div>

@@ -13,7 +13,14 @@ import {
   addDays,
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { Employee, Shift, ScheduleEntry, PlanningAlert, DayColumn } from './types';
+import {
+  Employee,
+  Shift,
+  ScheduleEntry,
+  PlanningAlert,
+  DayColumn,
+  type ContractType,
+} from './types';
 
 // Utilitaire Tailwind + clsx
 export function cn(...inputs: ClassValue[]) {
@@ -217,18 +224,19 @@ export function detectAlerts(
     const employee = empMap.get(empId);
     if (!employee) return;
 
-    // Calcul heures semaine (utilise les heures validées si présentes)
+    // Calcul heures semaine (durée prévue des shifts, comme le planning prévu)
     const weeklyHours = empEntries.reduce((sum, e) => {
       const shift = shiftMap.get(e.shiftId);
-      return sum + getEntryDurationHours(e, shift);
+      return sum + getPlannedEntryDurationHours(e, shift);
     }, 0);
 
-    if (weeklyHours > 48) {
+    const maxHours = employee.contractHours;
+    if (maxHours > 0 && weeklyHours > maxHours) {
       alerts.push({
         id: `alert-overtime-${empId}-${weekStart}`,
         type: 'overtime',
         severity: 'error',
-        message: `${employee.firstName} ${employee.lastName} a ${weeklyHours}h planifiées cette semaine (max 48h)`,
+        message: `${employee.firstName} ${employee.lastName} a ${formatHours(weeklyHours)} planifiées cette semaine (max ${maxHours}h)`,
         employeeId: empId,
         date: weekStart,
         resolved: false,
@@ -306,11 +314,15 @@ export function detectValidatedAvailabilityConflicts(
   const validatedMonth = new Set(
     validations.map((v) => `${v.employeeId}|${v.monthKey}`)
   );
-  const unavailableDay = new Set(
-    requests
-      .filter((r) => r.status === 'unavailable')
-      .map((r) => `${r.employeeId}|${r.date}`)
-  );
+  const blockedDay = new Map<string, 'unavailable' | 'vacation'>();
+  for (const r of requests) {
+    if (r.status === 'unavailable' || r.status === 'vacation' || r.status === 'preferred') {
+      blockedDay.set(
+        `${r.employeeId}|${r.date}`,
+        r.status === 'preferred' ? 'vacation' : (r.status as 'unavailable' | 'vacation')
+      );
+    }
+  }
 
   const alerts: PlanningAlert[] = [];
   const seenEmpDate = new Set<string>();
@@ -321,7 +333,8 @@ export function detectValidatedAvailabilityConflicts(
 
     const monthKey = format(parseISO(entry.date), 'yyyy-MM');
     if (!validatedMonth.has(`${entry.employeeId}|${monthKey}`)) continue;
-    if (!unavailableDay.has(`${entry.employeeId}|${entry.date}`)) continue;
+    const blockStatus = blockedDay.get(`${entry.employeeId}|${entry.date}`);
+    if (!blockStatus) continue;
 
     const dedupeKey = `${entry.employeeId}|${entry.date}`;
     if (seenEmpDate.has(dedupeKey)) continue;
@@ -330,11 +343,14 @@ export function detectValidatedAvailabilityConflicts(
     const employee = empMap.get(entry.employeeId);
     if (!employee) continue;
 
+    const reasonLabel =
+      blockStatus === 'vacation' ? 'être en vacances' : 'être indisponible';
+
     alerts.push({
       id: `alert-unavail-validated-${entry.employeeId}-${entry.date}`,
       type: 'validated_unavailable',
       severity: 'error',
-      message: `${employee.firstName} ${employee.lastName} est planifié(e) le ${formatDate(entry.date)} alors qu'il/elle a indiqué être indisponible et a validé ses disponibilités pour ce mois.`,
+      message: `${employee.firstName} ${employee.lastName} est planifié(e) le ${formatDate(entry.date)} alors qu'il/elle a indiqué ${reasonLabel} et a validé ses disponibilités pour ce mois.`,
       employeeId: entry.employeeId,
       date: entry.date,
       resolved: false,
@@ -415,38 +431,17 @@ export function mergeAvailabilityWindowIntoMap(
     }
   }
   for (const r of rows) {
-    next[availabilityMapKey(r.employeeId, r.date)] = r.status;
+    const status =
+      r.status === 'vacation' || r.status === 'unavailable'
+        ? r.status
+        : r.status === 'preferred'
+          ? 'vacation'
+          : null;
+    if (status) {
+      next[availabilityMapKey(r.employeeId, r.date)] = status;
+    }
   }
   return next;
-}
-
-/** Représentation admin (planning) alignée sur les statuts employé : available / preferred / unavailable. */
-export function availabilityStatusDisplay(
-  status: string | undefined | null
-): { symbol: string; title: string; className: string } | null {
-  if (!status) return null;
-  switch (status) {
-    case 'available':
-      return {
-        symbol: '✓',
-        title: 'Disponibilité : Disponible',
-        className: 'text-emerald-600',
-      };
-    case 'preferred':
-      return {
-        symbol: '★',
-        title: 'Disponibilité : Préféré',
-        className: 'text-amber-700',
-      };
-    case 'unavailable':
-      return {
-        symbol: '✗',
-        title: 'Disponibilité : Indisponible',
-        className: 'text-red-600',
-      };
-    default:
-      return null;
-  }
 }
 
 // ---- POSITIONNEMENT POPUP ----
@@ -518,9 +513,42 @@ export const DAY_NAMES_FR: Record<string, string> = {
   sunday: 'Dimanche',
 };
 
-export const CONTRACT_LABELS: Record<string, string> = {
-  'full-time': 'CDI Temps plein',
-  'part-time': 'CDI Temps partiel',
-  'freelance': 'Freelance',
-  'intern': 'Stagiaire',
+/** Les 4 types de contrat affichés dans l'app (Suisse). */
+export const CONTRACT_TYPES: ContractType[] = ['fixed', 'hourly', 'intern', 'apprentice'];
+
+export const CONTRACT_LABELS: Record<ContractType, string> = {
+  fixed: 'Salarié fixe',
+  hourly: 'À l\'heure',
+  intern: 'Stagiaire',
+  apprentice: 'Apprenti',
 };
+
+/** Anciennes valeurs (avant migration) — affichage seulement. */
+const LEGACY_CONTRACT_LABELS: Record<string, string> = {
+  'full-time': 'Salarié fixe',
+  'part-time': 'Salarié fixe (temps partiel)',
+  freelance: 'À l\'heure',
+};
+
+/** Libellé affiché sur les cartes employés, filtres, etc. */
+export function getContractLabel(contractType: string): string {
+  if (contractType in CONTRACT_LABELS) {
+    return CONTRACT_LABELS[contractType as ContractType];
+  }
+  return LEGACY_CONTRACT_LABELS[contractType] ?? contractType;
+}
+
+/** Convertit les anciennes valeurs en base vers le modèle Suisse. */
+export function normalizeContractType(raw: string | null | undefined): ContractType {
+  const map: Record<string, ContractType> = {
+    'full-time': 'fixed',
+    'part-time': 'fixed',
+    freelance: 'hourly',
+    intern: 'intern',
+    fixed: 'fixed',
+    hourly: 'hourly',
+    apprentice: 'apprentice',
+  };
+  if (raw && raw in map) return map[raw];
+  return 'fixed';
+}

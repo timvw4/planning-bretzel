@@ -19,6 +19,13 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { EMPLOYEE_COLORS, DAY_NAMES_FR, CONTRACT_LABELS } from '@/lib/utils';
+import {
+  getDefaultContractHours,
+  getMaxContractHours,
+  getMinContractHours,
+  clampContractHours,
+  SWISS_DEFAULT_FULL_TIME_HOURS,
+} from '@/lib/swissLabor';
 import { cn } from '@/lib/utils';
 
 interface EmployeeModalProps {
@@ -41,7 +48,7 @@ const defaultForm: Omit<Employee, 'id' | 'createdAt'> = {
   phone: '',
   color: EMPLOYEE_COLORS[0],
   availability: POSITION_RULES.vente.defaultAvailability,
-  contractType: 'full-time',
+  contractType: 'fixed',
   contractHours: POSITION_RULES.vente.defaultContractHours,
   notes: '',
   isActive: true,
@@ -72,6 +79,11 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
     if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
       newErrors.email = "L'email n'est pas valide";
     }
+    const minH = getMinContractHours(form.contractType);
+    const maxH = getMaxContractHours(form.contractType);
+    if (form.contractHours < minH || form.contractHours > maxH) {
+      newErrors.contractHours = `Entre ${minH} et ${maxH} h / semaine (Suisse)`;
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -98,9 +110,23 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
       ...prev,
       position,
       availability: rules.defaultAvailability,
-      contractHours: rules.defaultContractHours,
+      contractHours:
+        prev.contractType === 'fixed'
+          ? rules.defaultContractHours
+          : getDefaultContractHours(prev.contractType, position),
     }));
   };
+
+  const handleContractTypeChange = (contractType: ContractType) => {
+    setForm((prev) => ({
+      ...prev,
+      contractType,
+      contractHours: getDefaultContractHours(contractType, prev.position),
+    }));
+  };
+
+  const maxContractHours = getMaxContractHours(form.contractType);
+  const minContractHours = getMinContractHours(form.contractType);
 
   const positionRules = POSITION_RULES[form.position];
 
@@ -213,7 +239,7 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
               <Label>Type de contrat</Label>
               <Select
                 value={form.contractType}
-                onValueChange={(v) => setForm((p) => ({ ...p, contractType: v as ContractType }))}
+                onValueChange={(v) => handleContractTypeChange(v as ContractType)}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -230,11 +256,26 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
               <Input
                 id="contractHours"
                 type="number"
-                min={1}
-                max={60}
+                min={minContractHours}
+                max={maxContractHours}
                 value={form.contractHours}
-                onChange={(e) => setForm((p) => ({ ...p, contractHours: parseInt(e.target.value) || 35 }))}
+                onChange={(e) =>
+                  setForm((p) => ({
+                    ...p,
+                    contractHours: clampContractHours(
+                      parseInt(e.target.value, 10) || getDefaultContractHours(p.contractType, p.position),
+                      p.contractType
+                    ),
+                  }))
+                }
               />
+              {errors.contractHours ? (
+                <p className="text-xs text-red-500">{errors.contractHours}</p>
+              ) : (
+                <p className="text-[11px] text-slate-400">
+                  Temps plein suisse : {SWISS_DEFAULT_FULL_TIME_HOURS} h — max. {maxContractHours} h
+                </p>
+              )}
             </div>
           </div>
 

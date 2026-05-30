@@ -32,7 +32,7 @@ import {
 import { EmployeeModal } from '@/components/employees/EmployeeModal';
 import { usePlanningStore } from '@/lib/store';
 import { Employee } from '@/lib/types';
-import { getInitials, formatDate, DAY_NAMES_FR, CONTRACT_LABELS, formatHours } from '@/lib/utils';
+import { getInitials, formatDate, DAY_NAMES_FR, CONTRACT_TYPES, CONTRACT_LABELS, getContractLabel, formatHours } from '@/lib/utils';
 import { getPositionLabel, POSITION_RULES } from '@/lib/employeePosition';
 import {
   format,
@@ -41,7 +41,7 @@ import {
 } from 'date-fns';
 
 const POSITION_FILTERS = ['all', 'boulanger', 'vente', 'cuisine'] as const;
-const CONTRACT_FILTERS = ['all', 'full-time', 'part-time', 'freelance', 'intern'] as const;
+const CONTRACT_FILTERS = ['all', ...CONTRACT_TYPES] as const;
 
 function getPositionFilterLabel(value: (typeof POSITION_FILTERS)[number]) {
   return value === 'all' ? 'Tous postes' : POSITION_RULES[value].label;
@@ -49,10 +49,7 @@ function getPositionFilterLabel(value: (typeof POSITION_FILTERS)[number]) {
 
 function getContractFilterLabel(value: (typeof CONTRACT_FILTERS)[number]) {
   if (value === 'all') return 'Tous contrats';
-  if (value === 'full-time') return 'Temps plein';
-  if (value === 'part-time') return 'Temps partiel';
-  if (value === 'freelance') return 'Freelance';
-  return 'Stagiaires';
+  return CONTRACT_LABELS[value];
 }
 
 export default function EmployeesPage() {
@@ -339,7 +336,7 @@ export default function EmployeesPage() {
                       <div>
                         <p className="text-[10px] text-slate-400 uppercase tracking-wide">Contrat</p>
                         <p className="text-xs font-medium text-slate-700 mt-0.5">
-                          {CONTRACT_LABELS[emp.contractType]} · {emp.contractHours}h/sem
+                          {getContractLabel(emp.contractType)} · {emp.contractHours}h/sem
                         </p>
                       </div>
                       <div className="text-right">

@@ -22,7 +22,11 @@ import { cn } from '@/lib/utils';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
 import { createClient } from '@/lib/supabase/client';
-import { useEffect, useState } from 'react';
+import {
+  countPunchesAwaitingReview,
+  POINTAGES_REVIEW_UPDATED_EVENT,
+} from '@/lib/timePunches';
+import { useEffect, useState, useCallback } from 'react';
 
 const navigation = [
   {
@@ -70,34 +74,43 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const [pendingUnlockCount, setPendingUnlockCount] = useState(0);
   const [pendingTimesheetCount, setPendingTimesheetCount] = useState(0);
 
-  useEffect(() => {
+  const refreshPendingCounts = useCallback(async () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     const supabase = createClient();
-    const fetchPending = async () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      const [{ count: unlockCount }, { count: timesheetCount }] = await Promise.all([
-        supabase
-          .from('availability_unlock_requests')
-          .select('*', { count: 'exact', head: true })
-          .eq('status', 'pending'),
-        supabase
-          .from('time_declarations')
-          .select('*', { count: 'exact', head: true })
-          .in('status', ['pending', 'auto_closed']),
-      ]);
-      setPendingUnlockCount(unlockCount ?? 0);
-      setPendingTimesheetCount(timesheetCount ?? 0);
-    };
-    void fetchPending();
+    const [{ count: unlockCount }, timesheetCount] = await Promise.all([
+      supabase
+        .from('availability_unlock_requests')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending'),
+      countPunchesAwaitingReview(supabase),
+    ]);
+    setPendingUnlockCount(unlockCount ?? 0);
+    setPendingTimesheetCount(timesheetCount);
+  }, []);
+
+  useEffect(() => {
+    void refreshPendingCounts();
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void fetchPending();
+      if (document.visibilityState === 'visible') void refreshPendingCounts();
     };
     document.addEventListener('visibilitychange', onVisible);
-    const interval = setInterval(fetchPending, 120000);
+    const interval = setInterval(refreshPendingCounts, 120000);
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
       clearInterval(interval);
     };
-  }, []);
+  }, [refreshPendingCounts]);
+
+  useEffect(() => {
+    if (pathname === '/pointages') void refreshPendingCounts();
+  }, [pathname, refreshPendingCounts]);
+
+  useEffect(() => {
+    const onPointagesUpdated = () => void refreshPendingCounts();
+    window.addEventListener(POINTAGES_REVIEW_UPDATED_EVENT, onPointagesUpdated);
+    return () =>
+      window.removeEventListener(POINTAGES_REVIEW_UPDATED_EVENT, onPointagesUpdated);
+  }, [refreshPendingCounts]);
 
   const handleLogout = async () => {
     const supabase = createClient();
@@ -241,7 +254,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         <div className="border-t border-slate-100 px-4 py-4">
           <div className="rounded-lg bg-indigo-50 p-3">
             <p className="text-xs font-semibold text-indigo-700">Boulangerie Bretzel</p>
-            <p className="text-xs text-indigo-500 mt-0.5">© 2026 - version 0.1.1</p>
+            <p className="text-xs text-indigo-500 mt-0.5">© 2026 - version 0.1.2</p>
           </div>
         </div>
       )}

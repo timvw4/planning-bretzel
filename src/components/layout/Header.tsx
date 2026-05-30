@@ -4,12 +4,10 @@ import { Bell, AlertTriangle, AlertCircle, Info, Check, CheckCheck, X } from 'lu
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
 import { formatDate } from '@/lib/utils';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useState, useRef, useEffect } from 'react';
 import { PlanningAlert } from '@/lib/types';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { createClient } from '@/lib/supabase/client';
 
 interface HeaderProps {
   title: string;
@@ -46,24 +44,6 @@ export function Header({ title, subtitle, actions }: HeaderProps) {
       employees: s.employees,
     }))
   );
-  const [initials, setInitials] = useState('?');
-
-  useEffect(() => {
-    createClient().auth.getUser().then(({ data }) => {
-      const email = data.user?.email ?? '';
-      const name = data.user?.user_metadata?.full_name as string | undefined;
-      if (name) {
-        const parts = name.trim().split(' ');
-        setInitials(
-          parts.length >= 2
-            ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-            : parts[0].slice(0, 2).toUpperCase()
-        );
-      } else {
-        setInitials(email.slice(0, 2).toUpperCase());
-      }
-    });
-  }, []);
   const activeAlerts = alerts.filter((a) => !a.resolved);
   const resolvedAlerts = alerts.filter((a) => a.resolved);
   const today = new Date();
@@ -150,7 +130,7 @@ export function Header({ title, subtitle, actions }: HeaderProps) {
               <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
                 <div className="flex items-center gap-2">
                   <Bell className="h-4 w-4 text-slate-600" />
-                  <span className="text-sm font-semibold text-slate-800">Alertes planning</span>
+                  <span className="text-sm font-semibold text-slate-800">Alertes</span>
                   {activeAlerts.length > 0 && (
                     <span className="text-[10px] font-bold text-white bg-red-500 rounded-full px-1.5 py-0.5 leading-none">
                       {activeAlerts.length}
@@ -264,13 +244,6 @@ export function Header({ title, subtitle, actions }: HeaderProps) {
             </div>
           )}
         </div>
-
-        {/* Avatar utilisateur */}
-        <Avatar className="h-8 w-8">
-          <AvatarFallback className="bg-indigo-600 text-white text-xs font-bold">
-            {initials}
-          </AvatarFallback>
-        </Avatar>
       </div>
     </header>
   );

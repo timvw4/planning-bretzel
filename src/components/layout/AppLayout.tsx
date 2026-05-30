@@ -7,6 +7,7 @@ import { usePlanningStore } from '@/lib/store';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Loader2 } from 'lucide-react';
 import { usePathname } from 'next/navigation';
+import { POINTAGES_REVIEW_UPDATED_EVENT } from '@/lib/timePunches';
 
 // Pages qui ne doivent PAS afficher la sidebar admin
 // Note : '/employee' avec correspondance exacte ou '/employee/' pour éviter de matcher '/employees'
@@ -25,6 +26,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const loadData = usePlanningStore((s) => s.loadData);
+  const refreshAlerts = usePlanningStore((s) => s.refreshAlerts);
   const isLoading = usePlanningStore((s) => s.isLoading);
 
   useEffect(() => {
@@ -32,6 +34,26 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     if (!isAdminPage) return;
     void loadData();
   }, [isAdminPage, loadData]);
+
+  useEffect(() => {
+    if (!isAdminPage) return;
+
+    const refresh = () => {
+      if (document.visibilityState === 'hidden') return;
+      void refreshAlerts();
+    };
+
+    const interval = setInterval(refresh, 90000);
+    const onPointagesUpdated = () => refresh();
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener(POINTAGES_REVIEW_UPDATED_EVENT, onPointagesUpdated);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener(POINTAGES_REVIEW_UPDATED_EVENT, onPointagesUpdated);
+    };
+  }, [isAdminPage, refreshAlerts]);
 
   // Pages publiques (login, register, employee) → pas de sidebar, pas de chargement admin
   if (!isAdminPage) {

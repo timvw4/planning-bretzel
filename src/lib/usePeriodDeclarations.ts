@@ -17,6 +17,7 @@ function declarationKey(employeeId: string, date: string): string {
 /** Charge les déclarations terminées (clock out) sur une période, indexées par employé + date. */
 export function usePeriodDeclarations(rangeStart: string, rangeEnd: string) {
   const [lookup, setLookup] = useState<Map<string, CellDeclarationFlags>>(new Map());
+  const [reloadSeq, setReloadSeq] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,7 +54,9 @@ export function usePeriodDeclarations(rangeStart: string, rangeEnd: string) {
     return () => {
       cancelled = true;
     };
-  }, [rangeStart, rangeEnd]);
+  }, [rangeStart, rangeEnd, reloadSeq]);
+
+  const reload = useCallback(() => setReloadSeq((n) => n + 1), []);
 
   const getDeclarations = useCallback(
     (employeeId: string, date: string): CellDeclarationFlags | undefined =>
@@ -61,5 +64,5 @@ export function usePeriodDeclarations(rangeStart: string, rangeEnd: string) {
     [lookup]
   );
 
-  return { getDeclarations };
+  return { getDeclarations, reload };
 }

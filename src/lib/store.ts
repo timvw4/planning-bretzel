@@ -20,6 +20,33 @@ import { db } from '@/lib/supabase/db';
 import { createClient } from '@/lib/supabase/client';
 import { supabaseErrorMessage } from '@/lib/supabase/errorMessage';
 import { format, startOfWeek, endOfWeek } from 'date-fns';
+import { fetchGeofencePunchAlerts } from '@/lib/timePunches';
+
+function mergeAlertsPreservingResolved(
+  prev: PlanningAlert[],
+  next: PlanningAlert[]
+): PlanningAlert[] {
+  const resolvedIds = new Set(prev.filter((a) => a.resolved).map((a) => a.id));
+  return next.map((a) => (resolvedIds.has(a.id) ? { ...a, resolved: true } : a));
+}
+
+async function appendGeofenceAlerts(
+  base: PlanningAlert[],
+  employees: Employee[],
+  settings: AppSettings,
+  prevAlerts: PlanningAlert[]
+): Promise<PlanningAlert[]> {
+  if (settings.notifications?.geofencePunch === false) {
+    return mergeAlertsPreservingResolved(prevAlerts, base);
+  }
+  try {
+    const geofence = await fetchGeofencePunchAlerts(createClient(), employees);
+    return mergeAlertsPreservingResolved(prevAlerts, [...base, ...geofence]);
+  } catch (err) {
+    console.error('Alertes GPS :', err);
+    return mergeAlertsPreservingResolved(prevAlerts, base);
+  }
+}
 
 interface PlanningStore {
   // ---- Données ----
@@ -29,14 +56,20 @@ interface PlanningStore {
   settings: AppSettings;
   alerts: PlanningAlert[];
   isLoading: boolean;
-  /** Statut dispo employé par cellule : clé `availabilityMapKey(employeeId, date)` → `available` | `preferred` | `unavailable` */
+  /** Statut dispo employé par cellule : clé → `vacation` | `unavailable` (exceptions uniquement) */
   availabilityStatusByKey: Record<string, string>;
+
+  /** Filtre employés partagé (planning prévu / réel, mensuel / hebdo). */
+  planningEmployeeFilterMode: 'all' | 'subset';
+  planningSelectedEmployeeIds: string[];
+  setPlanningEmployeeFilterMode: (mode: 'all' | 'subset') => void;
+  setPlanningSelectedEmployeeIds: (ids: string[]) => void;
 
   // ---- Vue planning ----
   currentDate: string;
 
   // ---- Chargement depuis Supabase ----
-  loadData: () => Promise<void>;
+  loadData: (options?: { silent?: boolean }) => Promise<void>;
   /** Charge / fusionne les disponibilités pour une plage de dates (vues planning). */
   mergeAvailabilityRequests: (dateFrom: string, dateTo: string) => Promise<void>;
 
@@ -61,6 +94,8 @@ interface PlanningStore {
     validatedStart: string,
     validatedEnd: string
   ) => Promise<void>;
+  /** Retire une journée du planning réel et supprime le pointage associé. */
+  removeValidatedDay: (employeeId: string, date: string) => Promise<void>;
   copyWeek: (sourceWeekStart: string, targetWeekStart: string) => void;
   setCurrentDate: (date: string) => void;
 
@@ -99,10 +134,16 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
   isLoading: true,
   currentDate: format(new Date(), 'yyyy-MM-dd'),
   availabilityStatusByKey: {},
+  planningEmployeeFilterMode: 'all',
+  planningSelectedEmployeeIds: [],
+
+  setPlanningEmployeeFilterMode: (mode) => set({ planningEmployeeFilterMode: mode }),
+  setPlanningSelectedEmployeeIds: (ids) => set({ planningSelectedEmployeeIds: ids }),
 
   // ---- Chargement depuis Supabase ─────────────────────────
-  loadData: async () => {
-    set({ isLoading: true });
+  loadData: async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+    if (!silent) set({ isLoading: true });
     try {
       const [employees, shifts, entries, settings] = await Promise.all([
         db.getEmployees(),
@@ -143,6 +184,14 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         alerts = buildPlanningAlerts(employees, shifts, entries, weekStart, weekEnd, [], []);
       }
 
+      const appSettings = settings ?? defaultSettings;
+      alerts = await appendGeofenceAlerts(
+        alerts,
+        employees,
+        appSettings,
+        get().alerts
+      );
+
       set({
         employees,
         shifts,
@@ -150,11 +199,11 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         settings: settings ?? defaultSettings,
         alerts,
         availabilityStatusByKey,
-        isLoading: false,
+        ...(silent ? {} : { isLoading: false }),
       });
     } catch (error) {
       console.error('Erreur lors du chargement des données:', error);
-      set({ isLoading: false });
+      if (!silent) set({ isLoading: false });
     }
   },
 
@@ -341,7 +390,43 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     } catch (err) {
       console.error(err);
       toast.error('Erreur lors de la mise à jour des heures réelles');
-      void get().loadData();
+      void get().loadData({ silent: true });
+    }
+  },
+
+  removeValidatedDay: async (employeeId, date) => {
+    const entry = get().scheduleEntries.find(
+      (e) => e.employeeId === employeeId && e.date === date
+    );
+    if (!entry) {
+      toast.error('Aucune entrée planning pour ce jour.');
+      return;
+    }
+    const updated: ScheduleEntry = {
+      ...entry,
+      validatedStart: null,
+      validatedEnd: null,
+      isModified: false,
+    };
+    set((state) => ({
+      scheduleEntries: state.scheduleEntries.map((e) =>
+        e.employeeId === employeeId && e.date === date ? updated : e
+      ),
+    }));
+    try {
+      await db.upsertEntry(updated);
+      const supabase = createClient();
+      const { error } = await supabase
+        .from('time_declarations')
+        .delete()
+        .eq('employee_id', employeeId)
+        .eq('date', date);
+      if (error) throw error;
+      toast.success('Journée retirée du planning réel');
+    } catch (err) {
+      console.error(err);
+      toast.error('Impossible de supprimer cette journée');
+      void get().loadData({ silent: true });
     }
   },
 
@@ -425,7 +510,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
 
   // ---- Alertes ────────────────────────────────────────────
   refreshAlerts: async () => {
-    const { employees, shifts, scheduleEntries } = get();
+    const { employees, shifts, scheduleEntries, settings } = get();
     const today = new Date();
     const weekStart = format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
     const weekEnd = format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
@@ -457,6 +542,13 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       console.error('refreshAlerts : lecture disponibilités / validations', err);
       alerts = buildPlanningAlerts(employees, shifts, scheduleEntries, weekStart, weekEnd, [], []);
     }
+
+    alerts = await appendGeofenceAlerts(
+      alerts,
+      employees,
+      settings ?? defaultSettings,
+      get().alerts
+    );
 
     set({ alerts, availabilityStatusByKey });
   },

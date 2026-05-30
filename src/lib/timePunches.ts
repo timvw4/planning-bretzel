@@ -2,8 +2,9 @@
  * Pointages employés (clock in / clock out) — types et utilitaires partagés.
  */
 
-import { format, parseISO, addHours, subHours, isBefore, isAfter } from 'date-fns';
-import type { WorkSiteGeofence } from '@/lib/types';
+import { format, parseISO, addHours, subHours, subDays, isBefore, isAfter } from 'date-fns';
+import { fr } from 'date-fns/locale';
+import type { WorkSiteGeofence, Employee, PlanningAlert } from '@/lib/types';
 import { isInsideGeofence } from '@/lib/geofence';
 import { requestDevicePosition } from '@/lib/geolocation';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -67,6 +68,37 @@ export function timestampToHHMM(iso: string): string {
   return format(parseISO(iso), 'HH:mm');
 }
 
+/** Construit un horodatage ISO depuis une date (YYYY-MM-DD) et une heure HH:mm. */
+export function dateAndHHMMToISO(date: string, hhmm: string): string {
+  return `${date}T${hhmm}:00`;
+}
+
+/** Statuts annulables par l'admin (erreur avant validation). */
+export const ADMIN_CANCELLABLE_STATUSES: PunchStatus[] = [
+  'in_progress',
+  'pending',
+  'auto_closed',
+];
+
+/** Met à jour les heures validées dans le planning réel après approbation. */
+export async function syncScheduleFromApproved(
+  supabase: SupabaseClient,
+  employeeId: string,
+  date: string,
+  start: string,
+  end: string
+) {
+  await supabase
+    .from('schedule_entries')
+    .update({
+      validated_start: start,
+      validated_end: end,
+      is_modified: true,
+    })
+    .eq('employee_id', employeeId)
+    .eq('date', date);
+}
+
 /** Compare l'heure actuelle à l'heure prévue (même jour, format HH:mm). */
 export function canClockInNow(plannedStart: string, now: Date = new Date()): boolean {
   const [h, m] = plannedStart.split(':').map(Number);
@@ -97,15 +129,15 @@ function hasActiveGeofence(workSite: WorkSiteGeofence | null): workSite is WorkS
 }
 
 /**
- * GPS pour un pointage.
- * - Arrivée (requireInside: true) : position obligatoire ET à l'intérieur du cercle si périmètre actif.
- * - Départ (requireInside: false) : toujours autorisé ; enregistre si l'employé est dedans ou dehors.
+ * GPS pour un pointage employé.
+ * Par défaut le pointage est autorisé hors périmètre ; la position est enregistrée si disponible.
+ * Option requireInside: true pour imposer le cercle (usage admin futur).
  */
 export async function resolvePunchGeolocation(
   workSite: WorkSiteGeofence | null,
   options?: { requireInside?: boolean }
 ): Promise<PunchGeoCols | 'blocked' | 'outside'> {
-  const requireInside = options?.requireInside !== false;
+  const requireInside = options?.requireInside === true;
   const empty: PunchGeoCols = {
     lat: null,
     lng: null,
@@ -142,6 +174,21 @@ export async function resolvePunchGeolocation(
   } catch {
     return fenceActive && requireInside ? 'blocked' : empty;
   }
+}
+
+/** Convertit le résultat GPS en colonnes BDD (pointage autorisé même si GPS refusé ou hors zone). */
+export function normalizePunchGeoResult(
+  result: PunchGeoCols | 'blocked' | 'outside'
+): PunchGeoCols {
+  if (result === 'blocked' || result === 'outside') {
+    return {
+      lat: null,
+      lng: null,
+      accuracy_m: null,
+      inside_geofence: null,
+    };
+  }
+  return result;
 }
 
 /** Charge le périmètre depuis app_settings. */
@@ -250,6 +297,98 @@ export const PUNCH_STATUS_LABEL: Record<PunchStatus, string> = {
 
 /** Statuts visibles dans le badge admin « à traiter ». */
 export const ADMIN_ACTION_STATUSES: PunchStatus[] = ['pending', 'auto_closed'];
+
+/** Statuts chargés en priorité sur la page Pointages (sans limite). */
+export const ADMIN_PRIORITY_PUNCH_STATUSES: PunchStatus[] = [
+  ...ADMIN_ACTION_STATUSES,
+  'in_progress',
+];
+
+/** Compte les pointages à traiter (même logique que l’onglet « À traiter »). */
+export async function countPunchesAwaitingReview(
+  supabase: SupabaseClient
+): Promise<number> {
+  const { count, error } = await supabase
+    .from('time_declarations')
+    .select('*', { count: 'exact', head: true })
+    .in('status', ADMIN_ACTION_STATUSES);
+  if (error) {
+    console.error(error);
+    return 0;
+  }
+  return count ?? 0;
+}
+
+export const POINTAGES_REVIEW_UPDATED_EVENT = 'pointages-review-updated';
+
+/** Notifie la sidebar (et autres vues) que la liste « À traiter » a changé. */
+export function notifyPointagesReviewUpdated(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(POINTAGES_REVIEW_UPDATED_EVENT));
+}
+
+const GEOFENCE_ALERT_DAYS = 30;
+
+/** Alertes cloche pour les pointages hors périmètre GPS (entrée ou sortie). */
+export async function fetchGeofencePunchAlerts(
+  supabase: SupabaseClient,
+  employees: Employee[],
+  daysBack = GEOFENCE_ALERT_DAYS
+): Promise<PlanningAlert[]> {
+  const since = format(subDays(new Date(), daysBack), 'yyyy-MM-dd');
+  const empMap = new Map(employees.map((e) => [e.id, e]));
+
+  const { data, error } = await supabase
+    .from('time_declarations')
+    .select(
+      'id, employee_id, date, clock_in_at, clock_out_at, clock_in_inside_geofence, clock_out_inside_geofence'
+    )
+    .gte('date', since)
+    .or('clock_in_inside_geofence.eq.false,clock_out_inside_geofence.eq.false')
+    .order('date', { ascending: false })
+    .limit(100);
+
+  if (error) {
+    console.error(error);
+    return [];
+  }
+
+  const alerts: PlanningAlert[] = [];
+
+  for (const row of data ?? []) {
+    const emp = empMap.get(row.employee_id);
+    const name = emp
+      ? `${emp.firstName}${emp.lastName ? ` ${emp.lastName}` : ''}`
+      : 'Un employé';
+    const dateLabel = format(parseISO(row.date), 'd MMMM', { locale: fr });
+
+    if (row.clock_in_inside_geofence === false && row.clock_in_at) {
+      alerts.push({
+        id: `geofence-in-${row.id}`,
+        type: 'geofence_clock_in',
+        severity: 'error',
+        message: `${name} a pointé son arrivée hors du périmètre GPS le ${dateLabel}`,
+        employeeId: row.employee_id,
+        date: row.date,
+        resolved: false,
+      });
+    }
+
+    if (row.clock_out_inside_geofence === false && row.clock_out_at) {
+      alerts.push({
+        id: `geofence-out-${row.id}`,
+        type: 'geofence_clock_out',
+        severity: 'error',
+        message: `${name} a pointé son départ hors du périmètre GPS le ${dateLabel}`,
+        employeeId: row.employee_id,
+        date: row.date,
+        resolved: false,
+      });
+    }
+  }
+
+  return alerts;
+}
 
 export type GeofenceCheck = boolean | null | undefined;
 

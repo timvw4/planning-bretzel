@@ -6,15 +6,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
-  RotateCcw,
   AlertTriangle,
   Clock,
   Download,
   Info,
   Eraser,
   Send,
-  Filter,
-  ChevronDown,
   CalendarDays,
 } from 'lucide-react';
 import {
@@ -43,6 +40,8 @@ import {
 } from '@/components/ui/dialog';
 import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
+import { PlanningEmployeeFilterDropdown } from '@/components/planning/PlanningEmployeeFilterDropdown';
+import { usePlanningEmployeeFilter } from '@/hooks/usePlanningEmployeeFilter';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -53,18 +52,12 @@ import {
   getPlannedShiftTimeRange,
   getPlannedEntryDurationHours,
   calculateShiftDuration,
-  availabilityStatusDisplay,
   availabilityMapKey,
+  detectAlerts,
 } from '@/lib/utils';
+import { AvailabilityStatusIcon, availabilityStatusMeta } from '@/components/availability/AvailabilityStatusIcon';
 import { getPositionLabel } from '@/lib/employeePosition';
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import type { PlanningAlert } from '@/lib/types';
 
 export default function WeeklyPlanningPage() {
   const router = useRouter();
@@ -80,7 +73,6 @@ export default function WeeklyPlanningPage() {
     getWeeklyHours,
     copyWeek,
     alerts,
-    resolveAlert,
     settings,
     publishWeekForEmployees,
     availabilityStatusByKey,
@@ -95,7 +87,6 @@ export default function WeeklyPlanningPage() {
       getWeeklyHours: s.getWeeklyHours,
       copyWeek: s.copyWeek,
       alerts: s.alerts,
-      resolveAlert: s.resolveAlert,
       settings: s.settings,
       publishWeekForEmployees: s.publishWeekForEmployees,
       availabilityStatusByKey: s.availabilityStatusByKey,
@@ -107,14 +98,10 @@ export default function WeeklyPlanningPage() {
   const [activeCell, setActiveCell] = useState<{ empId: string; date: string } | null>(null);
   const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | null>(null);
   const [hoveredCell, setHoveredCell] = useState<{ empId: string; date: string } | null>(null);
-  const [showAlerts, setShowAlerts] = useState(false);
   const [brushShiftId, setBrushShiftId] = useState<string | null>(null);
   const [eraseMode, setEraseMode] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishSubmitting, setPublishSubmitting] = useState(false);
-  /** 'all' = tous les employés actifs ; 'subset' = liste dans selectedEmployeeIds */
-  const [employeeFilterMode, setEmployeeFilterMode] = useState<'all' | 'subset'>('all');
-  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const pickerRef = useRef<HTMLDivElement>(null);
 
   const weekStart = startOfWeek(currentWeekDate, { weekStartsOn: 1 });
@@ -138,114 +125,41 @@ export default function WeeklyPlanningPage() {
     [employees, weekMonthKey]
   );
 
-  const employeesForFilterMenu = useMemo(
-    () =>
-      [...activeEmployees].sort((a, b) =>
-        a.firstName.localeCompare(b.firstName, 'fr', { sensitivity: 'base' })
-      ),
-    [activeEmployees]
-  );
-
-  const displayedEmployees = useMemo(() => {
-    if (employeeFilterMode === 'all') return activeEmployees;
-    return activeEmployees.filter((e) => new Set(selectedEmployeeIds).has(e.id));
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
-
-  const filterSummaryTitle = useMemo(() => {
-    const list =
-      employeeFilterMode === 'all'
-        ? activeEmployees
-        : activeEmployees.filter((e) => selectedEmployeeIds.includes(e.id));
-    return list
-      .map((e) => `${e.firstName}${e.lastName ? ` ${e.lastName}` : ''}`.trim())
-      .join(', ');
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
-
-  const filterSummaryLabel = useMemo(() => {
-    const n = activeEmployees.length;
-    if (n === 0) return 'Aucun employé actif';
-    if (employeeFilterMode === 'all') return `Tous les employés (${n})`;
-    const k = selectedEmployeeIds.length;
-    if (k === 0) return 'Aucun employé';
-    if (k === 1) {
-      const e = activeEmployees.find((x) => x.id === selectedEmployeeIds[0]);
-      return e
-        ? `${e.firstName}${e.lastName ? ` ${e.lastName}` : ''}`.trim()
-        : '1 employé';
-    }
-    return `${k} employés`;
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
-
-  const unifiedFilterTitle = filterSummaryTitle || filterSummaryLabel;
-
-  const hasActiveFilters = employeeFilterMode === 'subset';
-
-  const areAllEmployeesSelected =
-    employeeFilterMode === 'all' ||
-    (activeEmployees.length > 0 &&
-      activeEmployees.every((e) => selectedEmployeeIds.includes(e.id)));
-
-  const isEmployeeRowChecked = (id: string) =>
-    areAllEmployeesSelected || selectedEmployeeIds.includes(id);
-
-  const handleToggleAllEmployees = () => {
-    if (areAllEmployeesSelected) {
-      setEmployeeFilterMode('subset');
-      setSelectedEmployeeIds([]);
-    } else {
-      setEmployeeFilterMode('all');
-      setSelectedEmployeeIds([]);
-    }
-  };
-
-  const handleToggleOneEmployee = (id: string, checked: boolean) => {
-    if (areAllEmployeesSelected) {
-      if (!checked) {
-        setEmployeeFilterMode('subset');
-        setSelectedEmployeeIds(activeEmployees.map((e) => e.id).filter((x) => x !== id));
-      }
-      return;
-    }
-    if (checked) {
-      const next = Array.from(new Set([...selectedEmployeeIds, id]));
-      if (next.length === activeEmployees.length) {
-        setEmployeeFilterMode('all');
-        setSelectedEmployeeIds([]);
-      } else {
-        setSelectedEmployeeIds(next);
-      }
-    } else {
-      setEmployeeFilterMode('subset');
-      setSelectedEmployeeIds(selectedEmployeeIds.filter((x) => x !== id));
-    }
-  };
+  const { displayedEmployees } = usePlanningEmployeeFilter(activeEmployees);
 
   const shiftMap = new Map(shifts.map((s) => [s.id, s]));
-
-  // ── Map des jours fériés : "yyyy-MM-dd" -> nom ───────────────
   const holidayMap = new Map((settings.holidays ?? []).map((h) => [h.date, h.name]));
-  const activeAlerts = alerts.filter((a) => !a.resolved);
+
+  const viewedWeekAlerts = useMemo(
+    () => detectAlerts(scheduleEntries, employees, shifts, weekStartStr, weekEndStr),
+    [scheduleEntries, employees, shifts, weekStartStr, weekEndStr]
+  );
+
+  const activeAlerts = useMemo(() => {
+    const merged = new Map<string, PlanningAlert>();
+    for (const alert of viewedWeekAlerts) {
+      merged.set(alert.id, alert);
+    }
+    for (const alert of alerts) {
+      if (alert.resolved) continue;
+      if (
+        alert.type === 'validated_unavailable' &&
+        alert.date &&
+        alert.date >= weekStartStr &&
+        alert.date <= weekEndStr
+      ) {
+        merged.set(alert.id, alert);
+      }
+      if (alert.type === 'geofence_clock_in' || alert.type === 'geofence_clock_out') {
+        merged.set(alert.id, alert);
+      }
+    }
+    return [...merged.values()];
+  }, [viewedWeekAlerts, alerts, weekStartStr, weekEndStr]);
 
   useEffect(() => {
     void mergeAvailabilityRequests(weekStartStr, weekEndStr);
   }, [weekStartStr, weekEndStr, mergeAvailabilityRequests]);
-
-  useEffect(() => {
-    if (employeeFilterMode !== 'subset') return;
-    const valid = new Set(activeEmployees.map((e) => e.id));
-    setSelectedEmployeeIds((prev) => {
-      const pruned = prev.filter((id) => valid.has(id));
-      if (
-        pruned.length === activeEmployees.length &&
-        activeEmployees.length > 0 &&
-        activeEmployees.every((e) => pruned.includes(e.id))
-      ) {
-        queueMicrotask(() => setEmployeeFilterMode('all'));
-        return [];
-      }
-      return pruned;
-    });
-  }, [activeEmployees, weekMonthKey, employeeFilterMode]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -378,10 +292,10 @@ export default function WeeklyPlanningPage() {
   }, 0);
 
   const getCellAlerts = (empId: string, date: string) =>
-    alerts.filter((a) => !a.resolved && a.employeeId === empId && a.date === date);
+    activeAlerts.filter((a) => a.employeeId === empId && a.date === date);
 
   const getEmpAlerts = (empId: string) =>
-    alerts.filter((a) => !a.resolved && a.employeeId === empId);
+    activeAlerts.filter((a) => a.employeeId === empId);
 
   return (
     <div className="animate-fade-in flex flex-col h-screen">
@@ -389,72 +303,6 @@ export default function WeeklyPlanningPage() {
         title="Planning prévu"
         actions={
           <div className="flex items-center gap-2">
-            {/* Filtre employés + groupes */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9 min-w-[7rem] justify-between gap-2 font-normal px-3"
-                  title={unifiedFilterTitle || undefined}
-                  disabled={activeEmployees.length === 0}
-                >
-                  <span className="flex items-center gap-2 min-w-0">
-                    <Filter className="h-4 w-4 shrink-0 text-slate-500" />
-                    <span className="text-sm text-slate-700">Filtre</span>
-                    {hasActiveFilters && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" aria-hidden />
-                    )}
-                  </span>
-                  <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-80 max-h-[min(24rem,70vh)] overflow-y-auto">
-                <DropdownMenuLabel className="text-xs font-semibold text-slate-500">
-                  Employés affichés
-                </DropdownMenuLabel>
-                <DropdownMenuCheckboxItem
-                  checked={areAllEmployeesSelected}
-                  onCheckedChange={handleToggleAllEmployees}
-                  onSelect={(e) => e.preventDefault()}
-                >
-                  Tous les employés ({activeEmployees.length})
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator />
-                {employeesForFilterMenu.map((e) => (
-                  <DropdownMenuCheckboxItem
-                    key={e.id}
-                    checked={isEmployeeRowChecked(e.id)}
-                    onCheckedChange={(c) => handleToggleOneEmployee(e.id, c === true)}
-                    onSelect={(ev) => ev.preventDefault()}
-                  >
-                    <span className="flex items-center gap-2 min-w-0 flex-1">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full shrink-0 ring-1 ring-black/5"
-                        style={{ backgroundColor: e.color }}
-                      />
-                      <span className="truncate">
-                        {e.firstName}
-                        {e.lastName ? ` ${e.lastName}` : ''}
-                      </span>
-                      <span className="text-[10px] text-slate-400 ml-auto shrink-0 tabular-nums">
-                        {getInitials(e.firstName, e.lastName)}
-                      </span>
-                    </span>
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {activeAlerts.length > 0 && (
-              <button
-                onClick={() => setShowAlerts(!showAlerts)}
-                className="flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 hover:bg-amber-100 transition-colors"
-              >
-                <AlertTriangle className="h-3.5 w-3.5" />
-                {activeAlerts.length} alerte{activeAlerts.length > 1 ? 's' : ''}
-              </button>
-            )}
             <Button variant="outline" size="sm" onClick={handleCopyWeek}>
               <Copy className="h-4 w-4" />
               Copier la semaine
@@ -507,47 +355,6 @@ export default function WeeklyPlanningPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Panel alertes */}
-      {showAlerts && activeAlerts.length > 0 && (
-        <div className="mx-6 mt-4 bg-white rounded-2xl border border-amber-200 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 bg-amber-50 border-b border-amber-100">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-600" />
-              <span className="text-sm font-semibold text-amber-800">
-                {activeAlerts.length} alerte{activeAlerts.length > 1 ? 's' : ''} détectée{activeAlerts.length > 1 ? 's' : ''}
-              </span>
-            </div>
-            <button
-              onClick={() => setShowAlerts(false)}
-              className="text-xs text-amber-600 hover:text-amber-800"
-            >
-              Masquer
-            </button>
-          </div>
-          <div className="divide-y divide-slate-100 max-h-40 overflow-y-auto">
-            {activeAlerts.map((alert) => {
-              const emp = employees.find((e) => e.id === alert.employeeId);
-              return (
-                <div key={alert.id} className="flex items-start gap-3 px-4 py-2.5">
-                  <div
-                    className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${
-                      alert.severity === 'error' ? 'bg-red-500' : 'bg-amber-500'
-                    }`}
-                  />
-                  <p className="text-xs text-slate-700 flex-1 leading-relaxed">{alert.message}</p>
-                  <button
-                    onClick={() => resolveAlert(alert.id)}
-                    className="text-[10px] text-slate-400 hover:text-slate-600 shrink-0"
-                  >
-                    Résoudre
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Toolbar navigation */}
       <div className="bg-white border-b border-slate-100">
         {/* Ligne 1 : navigation + stats */}
@@ -574,24 +381,7 @@ export default function WeeklyPlanningPage() {
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setCurrentWeekDate(new Date())}
-              className="hidden sm:flex text-xs text-slate-500"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Cette semaine
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setCurrentWeekDate(new Date())}
-              className="sm:hidden"
-              title="Cette semaine"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </Button>
+            <PlanningEmployeeFilterDropdown activeEmployees={activeEmployees} />
             <Button
               variant="outline"
               size="sm"
@@ -797,7 +587,7 @@ export default function WeeklyPlanningPage() {
                       const isActive =
                         activeCell?.empId === employee.id && activeCell?.date === dateStr;
                       const cellAlerts = getCellAlerts(employee.id, dateStr);
-                      const availDisp = availabilityStatusDisplay(
+                      const availDisp = availabilityStatusMeta(
                         availabilityStatusByKey[availabilityMapKey(employee.id, dateStr)]
                       );
 
@@ -862,13 +652,17 @@ export default function WeeklyPlanningPage() {
                               <div className="absolute top-1 right-1 w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
                             )}
 
-                            {/* Indicateur disponibilité employé (★ / ✓ / ✗) */}
+                            {/* Indicateur disponibilité employé */}
                             {availDisp && (
                               <span
-                                className={`absolute bottom-0.5 left-0.5 leading-none font-bold pointer-events-none drop-shadow-[0_0_1px_rgba(255,255,255,0.9)] text-[10px] ${availDisp.className}`}
+                                className={`absolute bottom-0.5 left-0.5 leading-none pointer-events-none drop-shadow-[0_0_1px_rgba(255,255,255,0.9)] ${availDisp.className}`}
                                 title={availDisp.title}
                               >
-                                {availDisp.symbol}
+                                <AvailabilityStatusIcon
+                                  status={availDisp.displayStatus}
+                                  size={10}
+                                  strokeWidth={2.75}
+                                />
                               </span>
                             )}
                           </div>

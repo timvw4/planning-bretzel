@@ -26,13 +26,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import {
   type TimePunchRow,
   type PunchStatus,
   isDeclarableWorkShift,
-  canClockInNow,
-  minutesUntilClockInAllowed,
   resolvePunchGeolocation,
+  normalizePunchGeoResult,
   loadWorkSiteFence,
   runAutoCloseStalePunches,
   timestampToHHMM,
@@ -102,6 +102,7 @@ export default function EmployeeTimesheetsPage() {
   const [pause15min, setPause15min] = useState(true);
   const [hadSnack, setHadSnack] = useState(false);
   const [ateWorkFood, setAteWorkFood] = useState(false);
+  const [note, setNote] = useState('');
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
 
@@ -194,35 +195,14 @@ export default function EmployeeTimesheetsPage() {
   const canStart = useMemo(() => {
     if (!todayCtx?.shift) return false;
     if (todayCtx.punch) return false;
-    return canClockInNow(todayCtx.shift.startTime);
-  }, [todayCtx]);
-
-  const waitMinutes = useMemo(() => {
-    if (!todayCtx?.shift || todayCtx.punch) return 0;
-    return minutesUntilClockInAllowed(todayCtx.shift.startTime);
+    return true;
   }, [todayCtx]);
 
   const handleClockIn = async () => {
     if (!employeeId || !todayCtx?.shift) return;
-    if (!canClockInNow(todayCtx.shift.startTime)) {
-      toast.error(`Pointage possible à partir de ${todayCtx.shift.startTime}`);
-      return;
-    }
 
     setClockInLoading(true);
-    const geo = await resolvePunchGeolocation(workSiteFence);
-    if (geo === 'blocked') {
-      toast.error(
-        'Autorisez la géolocalisation pour pointer (périmètre actif).'
-      );
-      setClockInLoading(false);
-      return;
-    }
-    if (geo === 'outside') {
-      toast.error('Vous devez être sur le lieu de travail pour commencer.');
-      setClockInLoading(false);
-      return;
-    }
+    const geo = normalizePunchGeoResult(await resolvePunchGeolocation(workSiteFence));
 
     const supabase = createClient();
     const now = new Date().toISOString();
@@ -261,12 +241,7 @@ export default function EmployeeTimesheetsPage() {
     if (!employeeId || !todayCtx?.punch) return;
 
     setClockOutLoading(true);
-    // Départ : autorisé même hors périmètre (GPS enregistré si disponible)
-    const geo = await resolvePunchGeolocation(workSiteFence, { requireInside: false });
-    const geoData =
-      geo === 'blocked' || geo === 'outside'
-        ? { lat: null, lng: null, accuracy_m: null, inside_geofence: null }
-        : geo;
+    const geo = normalizePunchGeoResult(await resolvePunchGeolocation(workSiteFence));
 
     const supabase = createClient();
     const now = new Date().toISOString();
@@ -274,13 +249,14 @@ export default function EmployeeTimesheetsPage() {
       .from('time_declarations')
       .update({
         clock_out_at: now,
-        clock_out_lat: geoData.lat,
-        clock_out_lng: geoData.lng,
-        clock_out_accuracy_m: geoData.accuracy_m,
-        clock_out_inside_geofence: geoData.inside_geofence,
+        clock_out_lat: geo.lat,
+        clock_out_lng: geo.lng,
+        clock_out_accuracy_m: geo.accuracy_m,
+        clock_out_inside_geofence: geo.inside_geofence,
         pause_15min: pause15min,
         had_snack: hadSnack,
         ate_work_food: ateWorkFood,
+        note: note.trim() || null,
         status: 'pending',
       })
       .eq('id', todayCtx.punch.id)
@@ -295,6 +271,7 @@ export default function EmployeeTimesheetsPage() {
 
     toast.success(`Départ enregistré à ${timestampToHHMM(now)}`);
     setOutDialogOpen(false);
+    setNote('');
     setTodayCtx((prev) =>
       prev ? { ...prev, punch: data as TimePunchRow } : prev
     );
@@ -395,14 +372,13 @@ export default function EmployeeTimesheetsPage() {
               </p>
             )}
 
-            {/* Actions */}
-            {!punch && waitMinutes > 0 && (
-              <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3 text-sm text-slate-600">
-                Pointage disponible à <strong>{shift.startTime}</strong> (dans
-                environ {waitMinutes} min).
-              </div>
+            {punch?.note && (
+              <p className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
+                Votre note : {punch.note}
+              </p>
             )}
 
+            {/* Actions */}
             {!punch && canStart && (
               <button
                 type="button"
@@ -422,7 +398,13 @@ export default function EmployeeTimesheetsPage() {
             {punch?.status === 'in_progress' && (
               <button
                 type="button"
-                onClick={() => setOutDialogOpen(true)}
+                onClick={() => {
+                  setPause15min(true);
+                  setHadSnack(false);
+                  setAteWorkFood(false);
+                  setNote('');
+                  setOutDialogOpen(true);
+                }}
                 disabled={clockOutLoading}
                 className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm transition-colors disabled:opacity-60"
               >
@@ -531,6 +513,18 @@ export default function EmployeeTimesheetsPage() {
                 J’ai mangé la nourriture du travail
               </span>
             </label>
+            <div className="space-y-1.5 pt-1">
+              <label htmlFor="clock-out-note" className="text-sm font-medium text-slate-700">
+                Note (optionnel)
+              </label>
+              <Textarea
+                id="clock-out-note"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Informations utiles pour votre responsable…"
+                rows={3}
+              />
+            </div>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setOutDialogOpen(false)}>

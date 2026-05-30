@@ -22,25 +22,40 @@ export function isEmployeeWorkDay(date: Date, workDays: AvailabilityDay[]): bool
   return workDays.includes(dateToAvailabilityDay(date));
 }
 
-export type AvailabilityStatus = 'available' | 'preferred' | 'unavailable';
+/** Exceptions enregistrées en base — absence d’entrée = jour habituel normal. */
+export type StoredAvailabilityStatus = 'vacation' | 'unavailable';
 
-const WORK_DAY_STATUS_CYCLE: AvailabilityStatus[] = ['available', 'preferred', 'unavailable'];
+/** Alias utilisé par le planning : seules les exceptions sont affichées. */
+export type AvailabilityStatus = StoredAvailabilityStatus;
 
-/** Statut affiché : entrée en base, ou « disponible » par défaut sur un jour habituel. */
-export function getEffectiveAvailabilityStatus(
-  date: Date,
-  workDays: AvailabilityDay[],
-  storedStatus: AvailabilityStatus | undefined
-): AvailabilityStatus | null {
-  if (!isEmployeeWorkDay(date, workDays)) return null;
-  return storedStatus ?? 'available';
+/** Convertit un statut lu en base (y compris legacy) vers une exception, ou undefined si normal. */
+export function normalizeStoredAvailabilityStatus(
+  status: string | undefined | null
+): StoredAvailabilityStatus | undefined {
+  if (!status) return undefined;
+  if (status === 'preferred') return 'vacation';
+  if (status === 'available') return undefined;
+  if (status === 'vacation' || status === 'unavailable') return status;
+  return undefined;
 }
 
-export function getNextWorkDayAvailabilityStatus(
-  current: AvailabilityStatus
-): AvailabilityStatus {
-  const idx = WORK_DAY_STATUS_CYCLE.indexOf(current);
-  return WORK_DAY_STATUS_CYCLE[(idx + 1) % WORK_DAY_STATUS_CYCLE.length];
+/** Exception sur un jour habituel, ou null si jour normal / hors jours habituels. */
+export function getStoredAvailabilityOnWorkDay(
+  date: Date,
+  workDays: AvailabilityDay[],
+  storedStatus: StoredAvailabilityStatus | undefined
+): StoredAvailabilityStatus | null {
+  if (!isEmployeeWorkDay(date, workDays)) return null;
+  return storedStatus ?? null;
+}
+
+/** Cycle employé : normal → vacances → indisponible → normal. */
+export function getNextStoredAvailabilityStatus(
+  current: StoredAvailabilityStatus | null
+): StoredAvailabilityStatus | null {
+  if (current === null) return 'vacation';
+  if (current === 'vacation') return 'unavailable';
+  return null;
 }
 
 /** Libellé court des jours habituels pour l’employé (ex. « Lun, Mar, Mer »). */
@@ -103,7 +118,7 @@ export const POSITION_RULES: Record<
       'friday',
       'saturday',
     ],
-    defaultContractHours: 35,
+    defaultContractHours: 42,
     canWorkNight: false,
     canWorkSunday: false,
     typicalHours: '6h30 – 15h',
@@ -120,7 +135,7 @@ export const POSITION_RULES: Record<
       'friday',
       'saturday',
     ],
-    defaultContractHours: 35,
+    defaultContractHours: 42,
     canWorkNight: false,
     canWorkSunday: false,
     typicalHours: '6h30 – 15h',

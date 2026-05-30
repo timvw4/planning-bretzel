@@ -2,7 +2,8 @@
 // TYPES TYPESCRIPT — Logiciel de planning Bretzel
 // ============================================================
 
-export type ContractType = 'full-time' | 'part-time' | 'freelance' | 'intern';
+/** Types de contrat (modèle Suisse) — stockés en base sous ces clés. */
+export type ContractType = 'fixed' | 'hourly' | 'intern' | 'apprentice';
 export type AvailabilityDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
 
 /** Poste structuré — pilote les règles horaires, dispos et (plus tard) salaires. */
@@ -66,7 +67,9 @@ export interface PlanningAlert {
     | 'unavailable'
     | 'validated_unavailable'
     | 'rest'
-    | 'understaffed';
+    | 'understaffed'
+    | 'geofence_clock_in'
+    | 'geofence_clock_out';
   severity: AlertSeverity;
   message: string;
   employeeId?: string;
@@ -93,6 +96,8 @@ export interface NotificationSettings {
   overtime: boolean;
   unavailable: boolean;
   lowRest: boolean;
+  /** Alerte cloche : pointage entrée/sortie hors périmètre GPS. */
+  geofencePunch: boolean;
 }
 
 /** Périmètre GPS du lieu de travail (centre + rayon en mètres). */

@@ -5,10 +5,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
-  Filter,
-  Pencil,
   CalendarDays,
+  Pencil,
+  Plus,
+  Download,
+  ChevronDown,
 } from 'lucide-react';
 import {
   format,
@@ -22,14 +23,14 @@ import {
   parseISO,
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import toast from 'react-hot-toast';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -38,6 +39,9 @@ import {
 } from '@/components/planning/ValidatedTimeEditDialog';
 import { EmployeeDeclarationStatsDialog } from '@/components/planning/EmployeeDeclarationStatsDialog';
 import { ValidatedShiftDeclarationIcons } from '@/components/planning/ValidatedShiftDeclarationIcons';
+import { ManualPunchDialog } from '@/components/planning/ManualPunchDialog';
+import { PlanningEmployeeFilterDropdown } from '@/components/planning/PlanningEmployeeFilterDropdown';
+import { usePlanningEmployeeFilter } from '@/hooks/usePlanningEmployeeFilter';
 import type { Employee } from '@/lib/types';
 import { usePeriodDeclarations } from '@/lib/usePeriodDeclarations';
 import { usePlanningStore } from '@/lib/store';
@@ -60,25 +64,28 @@ export default function RealWeeklyPlanningPage() {
     employees,
     shifts,
     scheduleEntries,
+    settings,
     getValidatedWeeklyHours,
     updateValidatedTimes,
+    removeValidatedDay,
   } = usePlanningStore(
     useShallow((s) => ({
       employees: s.employees,
       shifts: s.shifts,
       scheduleEntries: s.scheduleEntries,
+      settings: s.settings,
       getValidatedWeeklyHours: s.getValidatedWeeklyHours,
       updateValidatedTimes: s.updateValidatedTimes,
+      removeValidatedDay: s.removeValidatedDay,
     }))
   );
 
   const [currentWeekDate, setCurrentWeekDate] = useState(new Date());
-  const [employeeFilterMode, setEmployeeFilterMode] = useState<'all' | 'subset'>('all');
-  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const [editTarget, setEditTarget] = useState<ValidatedTimeEditTarget | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [statsEmployee, setStatsEmployee] = useState<Employee | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
 
   const shiftMap = useMemo(() => new Map(shifts.map((s) => [s.id, s])), [shifts]);
 
@@ -88,7 +95,7 @@ export default function RealWeeklyPlanningPage() {
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(weekEnd, 'yyyy-MM-dd');
   const weekMonthKey = format(weekStart, 'yyyy-MM');
-  const { getDeclarations } = usePeriodDeclarations(weekStartStr, weekEndStr);
+  const { getDeclarations, reload: reloadDeclarations } = usePeriodDeclarations(weekStartStr, weekEndStr);
 
   const activeEmployees = useMemo(
     () =>
@@ -98,93 +105,13 @@ export default function RealWeeklyPlanningPage() {
     [employees, weekMonthKey]
   );
 
-  const employeesForFilterMenu = useMemo(
-    () =>
-      [...activeEmployees].sort((a, b) =>
-        a.firstName.localeCompare(b.firstName, 'fr', { sensitivity: 'base' })
-      ),
-    [activeEmployees]
-  );
-
-  const displayedEmployees = useMemo(() => {
-    if (employeeFilterMode === 'all') return activeEmployees;
-    return activeEmployees.filter((e) => selectedEmployeeIds.includes(e.id));
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
-
-  const filterSummaryLabel = useMemo(() => {
-    const n = activeEmployees.length;
-    if (n === 0) return 'Aucun employé actif';
-    if (employeeFilterMode === 'all') return `Tous les employés (${n})`;
-    const k = selectedEmployeeIds.length;
-    if (k === 0) return 'Aucun employé';
-    if (k === 1) {
-      const e = activeEmployees.find((x) => x.id === selectedEmployeeIds[0]);
-      return e
-        ? `${e.firstName}${e.lastName ? ` ${e.lastName}` : ''}`.trim()
-        : '1 employé';
-    }
-    return `${k} employés`;
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
+  const { displayedEmployees } = usePlanningEmployeeFilter(activeEmployees);
 
   useEffect(() => {
     if (!dateParam) return;
     const parsed = parseISO(dateParam);
     if (!Number.isNaN(parsed.getTime())) setCurrentWeekDate(parsed);
   }, [dateParam]);
-
-  useEffect(() => {
-    if (employeeFilterMode !== 'subset') return;
-    const valid = new Set(activeEmployees.map((e) => e.id));
-    setSelectedEmployeeIds((prev) => {
-      const pruned = prev.filter((id) => valid.has(id));
-      if (
-        pruned.length === activeEmployees.length &&
-        activeEmployees.length > 0 &&
-        activeEmployees.every((e) => pruned.includes(e.id))
-      ) {
-        queueMicrotask(() => setEmployeeFilterMode('all'));
-        return [];
-      }
-      return pruned;
-    });
-  }, [activeEmployees, weekMonthKey, employeeFilterMode]);
-
-  const areAllEmployeesSelected =
-    employeeFilterMode === 'all' ||
-    (activeEmployees.length > 0 &&
-      activeEmployees.every((e) => selectedEmployeeIds.includes(e.id)));
-
-  const isEmployeeRowChecked = (id: string) =>
-    areAllEmployeesSelected || selectedEmployeeIds.includes(id);
-
-  const handleToggleAllEmployees = () => {
-    if (areAllEmployeesSelected) {
-      setEmployeeFilterMode('subset');
-      setSelectedEmployeeIds([]);
-    } else {
-      setEmployeeFilterMode('all');
-      setSelectedEmployeeIds([]);
-    }
-  };
-
-  const handleToggleOneEmployee = (id: string, checked: boolean) => {
-    if (areAllEmployeesSelected) {
-      if (!checked) {
-        setEmployeeFilterMode('subset');
-        setSelectedEmployeeIds(activeEmployees.map((e) => e.id).filter((x) => x !== id));
-      }
-      return;
-    }
-    setSelectedEmployeeIds((prev) => {
-      const next = checked ? [...prev, id] : prev.filter((x) => x !== id);
-      if (next.length === activeEmployees.length) {
-        setEmployeeFilterMode('all');
-        return [];
-      }
-      setEmployeeFilterMode('subset');
-      return next;
-    });
-  };
 
   const openEdit = (
     employeeId: string,
@@ -228,11 +155,61 @@ export default function RealWeeklyPlanningPage() {
     0
   );
 
+  const handleExportExcel = async () => {
+    const { exportToExcel } = await import('@/lib/export');
+    await exportToExcel(
+      displayedEmployees,
+      shifts,
+      scheduleEntries,
+      weekStartStr,
+      weekEndStr,
+      settings.companyName,
+      `${weekMonthKey}-01`,
+      true
+    );
+    toast.success('Planning réel exporté en Excel');
+  };
+
+  const handleExportPDF = async () => {
+    const { exportToPDF } = await import('@/lib/export');
+    await exportToPDF(
+      displayedEmployees,
+      shifts,
+      scheduleEntries,
+      weekStartStr,
+      weekEndStr,
+      settings.companyName,
+      `${weekMonthKey}-01`,
+      settings.holidays ?? [],
+      true
+    );
+    toast.success('PDF téléchargé — vérifiez votre dossier Téléchargements');
+  };
+
   return (
     <div className="flex flex-col min-h-screen bg-slate-50/50">
       <Header
         title="Planning réel"
-        subtitle="Jours validés via les pointages — cliquez sur une case pour modifier les heures réelles"
+        subtitle="Jours validés via les pointages — ajoutez une journée oubliée ou modifiez les heures réelles"
+        actions={
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <Download className="h-4 w-4" />
+                <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Exporter</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => void handleExportExcel()}>
+                Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void handleExportPDF()}>
+                PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        }
       />
 
       <div className="flex-1 p-4 md:p-6 space-y-4">
@@ -266,6 +243,15 @@ export default function RealWeeklyPlanningPage() {
               <CalendarDays className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Vue mensuelle</span>
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              className="text-xs gap-1.5 bg-indigo-600 hover:bg-indigo-700"
+              onClick={() => setManualOpen(true)}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Ajouter un pointage
+            </Button>
           </div>
 
           <div className="flex items-center gap-2">
@@ -273,39 +259,7 @@ export default function RealWeeklyPlanningPage() {
               {validatedCount} jour{validatedCount !== 1 ? 's' : ''} validé{validatedCount !== 1 ? 's' : ''}
             </span>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-1.5">
-                  <Filter className="h-3.5 w-3.5" />
-                  {filterSummaryLabel}
-                  <ChevronDown className="h-3.5 w-3.5 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 max-h-80 overflow-y-auto">
-                <DropdownMenuLabel>Employés</DropdownMenuLabel>
-                <DropdownMenuCheckboxItem
-                  checked={areAllEmployeesSelected}
-                  onCheckedChange={() => handleToggleAllEmployees()}
-                  onSelect={(e) => e.preventDefault()}
-                >
-                  Tous les employés
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator />
-                {employeesForFilterMenu.map((emp) => (
-                  <DropdownMenuCheckboxItem
-                    key={emp.id}
-                    checked={isEmployeeRowChecked(emp.id)}
-                    onCheckedChange={(checked) =>
-                      handleToggleOneEmployee(emp.id, checked === true)
-                    }
-                    onSelect={(e) => e.preventDefault()}
-                  >
-                    {emp.firstName}
-                    {emp.lastName ? ` ${emp.lastName}` : ''}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <PlanningEmployeeFilterDropdown activeEmployees={activeEmployees} />
           </div>
         </div>
 
@@ -466,10 +420,19 @@ export default function RealWeeklyPlanningPage() {
         </div>
 
         <p className="text-xs text-slate-400">
-          Seuls les jours avec pointage approuvé apparaissent ici. La validation se fait dans l’onglet Pointages.
+          Seuls les jours avec pointage approuvé apparaissent ici. Utilisez{' '}
+          <strong className="font-medium text-slate-500">Ajouter un pointage</strong>{' '}
+          pour une journée oubliée, ou l’onglet Pointages pour valider les pointages
+          employés.
           {' '}Sous les horaires : pause (⏸), collation (☕), repas au travail (🍴) si cochés à la fin de service.
         </p>
       </div>
+
+      <ManualPunchDialog
+        open={manualOpen}
+        onOpenChange={setManualOpen}
+        onDone={() => reloadDeclarations()}
+      />
 
       <ValidatedTimeEditDialog
         target={editTarget}
@@ -478,6 +441,11 @@ export default function RealWeeklyPlanningPage() {
         onSave={async (start, end) => {
           if (!editTarget) return;
           await updateValidatedTimes(editTarget.employeeId, editTarget.date, start, end);
+        }}
+        onDelete={async () => {
+          if (!editTarget) return;
+          await removeValidatedDay(editTarget.employeeId, editTarget.date);
+          reloadDeclarations();
         }}
       />
 

@@ -10,38 +10,39 @@ import { fr } from 'date-fns/locale';
 import { ChevronLeft, ChevronRight, Lock, CheckCircle, Clock, XCircle, Send, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { AvailabilityDay } from '@/lib/types';
+import { AvailabilityStatusIcon } from '@/components/availability/AvailabilityStatusIcon';
 import {
   formatWorkDaysSummary,
-  getEffectiveAvailabilityStatus,
-  getNextWorkDayAvailabilityStatus,
   isEmployeeWorkDay,
+  normalizeStoredAvailabilityStatus,
+  getStoredAvailabilityOnWorkDay,
+  getNextStoredAvailabilityStatus,
+  type StoredAvailabilityStatus,
 } from '@/lib/employeePosition';
 
-type AvailabilityStatus = 'available' | 'unavailable' | 'preferred';
 type MonthState = 'editable' | 'validated' | 'request_pending' | 'request_rejected';
 
 interface AvailabilityEntry {
   date: string;
-  status: AvailabilityStatus;
+  status: StoredAvailabilityStatus;
 }
 
-const STATUS_CONFIG: Record<AvailabilityStatus, {
-  label: string; icon: string; bg: string; text: string; border: string;
+const EXCEPTION_CONFIG: Record<StoredAvailabilityStatus, {
+  label: string; bg: string; text: string; border: string;
 }> = {
-  available:   { label: 'Disponible',   icon: '✓', bg: '#DCFCE7', text: '#15803D', border: '#86EFAC' },
-  preferred:   { label: 'Préféré',      icon: '★', bg: '#FEF9C3', text: '#A16207', border: '#FDE047' },
-  unavailable: { label: 'Indisponible', icon: '✗', bg: '#FEE2E2', text: '#DC2626', border: '#FCA5A5' },
+  vacation:    { label: 'Vacances',     bg: '#DBEAFE', text: '#1D4ED8', border: '#93C5FD' },
+  unavailable: { label: 'Indisponible', bg: '#FEE2E2', text: '#DC2626', border: '#FCA5A5' },
 };
 
-// Cycle sur les jours habituels : dispo → préféré → indispo → dispo
+// Cycle : jour normal → vacances → indispo → jour normal
 const WEEK_DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 
 // ── Squelette de chargement initial ─────────────────────────
 function AvailabilitySkeleton() {
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-3 gap-3">
-        {[0, 1, 2].map((i) => (
+      <div className="grid grid-cols-2 gap-3">
+        {[0, 1].map((i) => (
           <div key={i} className="rounded-2xl border border-slate-100 bg-white p-3 text-center space-y-1.5">
             <div className="h-7 w-8 rounded-lg animate-shimmer mx-auto" />
             <div className="h-3 w-14 rounded-full animate-shimmer mx-auto" />
@@ -136,9 +137,12 @@ export default function EmployeeAvailabilityPage() {
     setWorkDays(parsedWorkDays);
 
     const map = new Map<string, AvailabilityEntry>();
-    (avails ?? []).forEach((row) =>
-      map.set(row.date, { date: row.date, status: row.status as AvailabilityStatus })
-    );
+    (avails ?? []).forEach((row) => {
+      const status = normalizeStoredAvailabilityStatus(row.status);
+      if (status) {
+        map.set(row.date, { date: row.date, status });
+      }
+    });
     setAvailabilities(map);
 
     if (validation?.id) {
@@ -173,16 +177,15 @@ export default function EmployeeAvailabilityPage() {
       return;
     }
 
-    const stored = availabilities.get(dateStr);
-    const effective = getEffectiveAvailabilityStatus(day, workDays, stored?.status);
-    if (!effective) return;
+    const stored = availabilities.get(dateStr)?.status;
+    const current = getStoredAvailabilityOnWorkDay(day, workDays, stored);
+    if (!isEmployeeWorkDay(day, workDays)) return;
 
-    const next = getNextWorkDayAvailabilityStatus(effective);
+    const next = getNextStoredAvailabilityStatus(current);
     const snapshot = new Map(availabilities);
     const optimistic = new Map(availabilities);
 
-    // Retour à « disponible » par défaut = suppression de l’entrée en base
-    if (next === 'available') {
+    if (next === null) {
       optimistic.delete(dateStr);
     } else {
       optimistic.set(dateStr, { date: dateStr, status: next });
@@ -192,7 +195,7 @@ export default function EmployeeAvailabilityPage() {
 
     const supabase = createClient();
     const { error } =
-      next === 'available'
+      next === null
         ? await supabase
             .from('availability_requests')
             .delete()
@@ -249,11 +252,11 @@ export default function EmployeeAvailabilityPage() {
   const days = eachDayOfInterval({ start: monthStart, end: monthEnd });
   const startPad = (getDay(monthStart) + 6) % 7;
   const workDaysSummary = formatWorkDaysSummary(workDays);
-  const countByStatus = (s: AvailabilityStatus) =>
+  const countExceptions = (status: StoredAvailabilityStatus) =>
     days.filter((day) => {
+      if (!isEmployeeWorkDay(day, workDays)) return false;
       const dateStr = format(day, 'yyyy-MM-dd');
-      const stored = availabilities.get(dateStr)?.status;
-      return getEffectiveAvailabilityStatus(day, workDays, stored) === s;
+      return availabilities.get(dateStr)?.status === status;
     }).length;
   const isLocked = monthState !== 'editable';
 
@@ -329,16 +332,16 @@ export default function EmployeeAvailabilityPage() {
         </div>
       )}
 
-      {/* ── Résumé compteurs ─────────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-3 animate-stagger-2">
-        {(Object.entries(STATUS_CONFIG) as [AvailabilityStatus, typeof STATUS_CONFIG[AvailabilityStatus]][]).map(([status, cfg]) => (
+      {/* ── Résumé exceptions ─────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-3 animate-stagger-2">
+        {(Object.entries(EXCEPTION_CONFIG) as [StoredAvailabilityStatus, typeof EXCEPTION_CONFIG[StoredAvailabilityStatus]][]).map(([status, cfg]) => (
           <div
             key={status}
             className="rounded-2xl border p-3 text-center transition-all duration-300"
             style={{ backgroundColor: cfg.bg + '55', borderColor: cfg.border }}
           >
             <p className="text-2xl font-bold tabular-nums" style={{ color: cfg.text }}>
-              {countByStatus(status)}
+              {countExceptions(status)}
             </p>
             <p className="text-[11px] font-semibold mt-0.5" style={{ color: cfg.text }}>{cfg.label}</p>
           </div>
@@ -381,62 +384,46 @@ export default function EmployeeAvailabilityPage() {
         {/* Légende compacte du cycle (uniquement si éditable) */}
         {!isLocked && (
           <div className="flex items-center justify-center gap-1.5 px-4 py-2.5 bg-slate-50/60 border-b border-slate-100 flex-wrap">
-            <span className="text-[10px] text-slate-400 font-medium">Sur vos jours habituels :</span>
+            <span className="text-[10px] text-slate-400 font-medium">Cliquez vos jours habituels :</span>
+            <span className="text-[10px] text-slate-500 font-medium">Normal</span>
+            <span className="text-[10px] text-slate-300">→</span>
             <span className="flex items-center gap-1">
               <span
-                className="w-4 h-4 rounded-md flex items-center justify-center text-[9px] font-bold"
+                className="w-4 h-4 rounded-md flex items-center justify-center"
                 style={{
-                  backgroundColor: STATUS_CONFIG.available.bg,
-                  color: STATUS_CONFIG.available.text,
+                  backgroundColor: EXCEPTION_CONFIG.vacation.bg,
+                  color: EXCEPTION_CONFIG.vacation.text,
                 }}
               >
-                ✓
+                <AvailabilityStatusIcon status="vacation" size={10} strokeWidth={2.5} />
               </span>
               <span
                 className="text-[10px] font-medium hidden sm:inline"
-                style={{ color: STATUS_CONFIG.available.text }}
+                style={{ color: EXCEPTION_CONFIG.vacation.text }}
               >
-                Dispo
+                Vacances
               </span>
             </span>
             <span className="text-[10px] text-slate-300">→</span>
             <span className="flex items-center gap-1">
               <span
-                className="w-4 h-4 rounded-md flex items-center justify-center text-[9px] font-bold"
+                className="w-4 h-4 rounded-md flex items-center justify-center"
                 style={{
-                  backgroundColor: STATUS_CONFIG.preferred.bg,
-                  color: STATUS_CONFIG.preferred.text,
+                  backgroundColor: EXCEPTION_CONFIG.unavailable.bg,
+                  color: EXCEPTION_CONFIG.unavailable.text,
                 }}
               >
-                ★
+                <AvailabilityStatusIcon status="unavailable" size={10} strokeWidth={3} />
               </span>
               <span
                 className="text-[10px] font-medium hidden sm:inline"
-                style={{ color: STATUS_CONFIG.preferred.text }}
-              >
-                Préféré
-              </span>
-            </span>
-            <span className="text-[10px] text-slate-300">→</span>
-            <span className="flex items-center gap-1">
-              <span
-                className="w-4 h-4 rounded-md flex items-center justify-center text-[9px] font-bold"
-                style={{
-                  backgroundColor: STATUS_CONFIG.unavailable.bg,
-                  color: STATUS_CONFIG.unavailable.text,
-                }}
-              >
-                ✗
-              </span>
-              <span
-                className="text-[10px] font-medium hidden sm:inline"
-                style={{ color: STATUS_CONFIG.unavailable.text }}
+                style={{ color: EXCEPTION_CONFIG.unavailable.text }}
               >
                 Indispo
               </span>
             </span>
             <span className="text-[10px] text-slate-300">→</span>
-            <span className="text-[10px] text-slate-400 font-medium">Dispo</span>
+            <span className="text-[10px] text-slate-500 font-medium">Normal</span>
           </div>
         )}
 
@@ -463,8 +450,8 @@ export default function EmployeeAvailabilityPage() {
             const dateStr = format(day, 'yyyy-MM-dd');
             const stored = availabilities.get(dateStr)?.status;
             const isWorkDay = isEmployeeWorkDay(day, workDays);
-            const effective = getEffectiveAvailabilityStatus(day, workDays, stored);
-            const cfg = effective ? STATUS_CONFIG[effective] : null;
+            const exception = getStoredAvailabilityOnWorkDay(day, workDays, stored);
+            const cfg = exception ? EXCEPTION_CONFIG[exception] : null;
             const isCurrentDay = isToday(day);
             const isWE = getDay(day) === 0 || getDay(day) === 6;
             const isPastDay =
@@ -473,11 +460,10 @@ export default function EmployeeAvailabilityPage() {
             const canEdit = isWorkDay && !isPastDay && !isLocked;
             const isHovered = hoveredDate === dateStr && canEdit;
 
-            const nextStatus =
-              effective && canEdit
-                ? getNextWorkDayAvailabilityStatus(effective)
-                : null;
-            const nextCfg = nextStatus ? STATUS_CONFIG[nextStatus] : null;
+            const nextStatus = canEdit
+              ? getNextStoredAvailabilityStatus(exception)
+              : null;
+            const nextCfg = nextStatus ? EXCEPTION_CONFIG[nextStatus] : null;
 
             const bgColor = !isWorkDay
               ? undefined
@@ -496,7 +482,9 @@ export default function EmployeeAvailabilityPage() {
                     ? 'Jour hors de vos jours habituels'
                     : isPastDay
                     ? 'Jour passé'
-                    : undefined
+                    : exception
+                    ? EXCEPTION_CONFIG[exception].label
+                    : 'Jour habituel — cliquez pour marquer une exception'
                 }
                 className={`h-[72px] border-b border-r border-slate-100 p-1.5 flex flex-col items-center justify-start relative ${
                   !isWorkDay
@@ -527,20 +515,22 @@ export default function EmployeeAvailabilityPage() {
                 </span>
 
                 <div className="flex-1 flex items-center justify-center">
-                  {isWorkDay && cfg ? (
-                    <span
-                      className="text-lg font-bold leading-none"
-                      style={{ color: cfg.text, transition: 'color 0.18s ease' }}
-                    >
-                      {cfg.icon}
-                    </span>
-                  ) : isHovered && nextCfg ? (
-                    <span
-                      className="text-base font-bold leading-none opacity-40"
+                  {exception && cfg ? (
+                    <AvailabilityStatusIcon
+                      status={exception}
+                      size={18}
+                      strokeWidth={2.5}
+                      className="shrink-0"
+                      style={{ color: cfg.text }}
+                    />
+                  ) : isHovered && nextStatus && nextCfg ? (
+                    <AvailabilityStatusIcon
+                      status={nextStatus}
+                      size={16}
+                      strokeWidth={2.5}
+                      className="shrink-0 opacity-40"
                       style={{ color: nextCfg.text }}
-                    >
-                      {nextCfg.icon}
-                    </span>
+                    />
                   ) : !isWorkDay ? (
                     <span className="text-[10px] text-slate-300">—</span>
                   ) : null}
@@ -570,7 +560,7 @@ export default function EmployeeAvailabilityPage() {
         {isLocked
           ? 'Ce mois est verrouillé. Demandez une modification à votre responsable.'
           : workDays.length > 0
-          ? 'Modifiez uniquement vos jours habituels, puis validez avant le début du mois.'
+          ? 'Marquez vos vacances ou indisponibilités sur vos jours habituels, puis validez avant le début du mois.'
           : 'En attente de configuration de vos jours habituels par votre responsable.'}
       </p>
 
@@ -586,6 +576,7 @@ export default function EmployeeAvailabilityPage() {
               Vos disponibilités pour{' '}
               <strong className="text-slate-700">{format(currentDate, 'MMMM yyyy', { locale: fr })}</strong>{' '}
               seront verrouillées ({workDaysSummary || 'jours habituels'}).
+              Seules vos exceptions (vacances, indisponibilités) sont enregistrées.
               Pour les modifier ensuite, il faudra en faire la demande.
             </p>
             <div className="flex gap-3">

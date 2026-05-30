@@ -14,6 +14,7 @@ import {
   MapPin,
   MapPinOff,
   Pencil,
+  Trash2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Header } from '@/components/layout/Header';
@@ -32,11 +33,15 @@ import {
   type ApprovedTimeMode,
   PUNCH_STATUS_LABEL,
   ADMIN_ACTION_STATUSES,
+  ADMIN_PRIORITY_PUNCH_STATUSES,
+  ADMIN_CANCELLABLE_STATUSES,
   getClockedTimes,
   resolveApprovedTimes,
   runAutoCloseStalePunches,
   geofencePunchDisplay,
   adminCanEditPunch,
+  syncScheduleFromApproved,
+  notifyPointagesReviewUpdated,
 } from '@/lib/timePunches';
 
 type ReviewTab = 'action' | 'approved' | 'in_progress';
@@ -49,19 +54,17 @@ interface PunchWithEmployee extends TimePunchRow {
   } | null;
 }
 
-async function syncScheduleFromApproved(
+async function clearScheduleValidatedIfAny(
   supabase: ReturnType<typeof createClient>,
   employeeId: string,
-  date: string,
-  start: string,
-  end: string
+  date: string
 ) {
   await supabase
     .from('schedule_entries')
     .update({
-      validated_start: start,
-      validated_end: end,
-      is_modified: true,
+      validated_start: null,
+      validated_end: null,
+      is_modified: false,
     })
     .eq('employee_id', employeeId)
     .eq('date', date);
@@ -100,8 +103,6 @@ function GeoPunchBadge({
 }
 
 function GeoSummary({ punch }: { punch: PunchWithEmployee }) {
-  const inGeo = geofencePunchDisplay(punch.clock_in_inside_geofence, 'in');
-  const outGeo = geofencePunchDisplay(punch.clock_out_inside_geofence, 'out');
   const hasOut = Boolean(punch.clock_out_at);
 
   return (
@@ -113,11 +114,6 @@ function GeoSummary({ punch }: { punch: PunchWithEmployee }) {
       {!hasOut && punch.status === 'in_progress' && (
         <span className="text-[10px] text-slate-400 px-2 py-0.5">Sortie non pointée</span>
       )}
-      {inGeo.variant === 'outside' || outGeo.variant === 'outside' ? (
-        <span className="text-[10px] font-bold uppercase text-red-600 px-1">
-          Attention GPS
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -218,7 +214,7 @@ function ValidateEditDialog({
       preview.start,
       preview.end
     );
-    void usePlanningStore.getState().loadData();
+    void usePlanningStore.getState().loadData({ silent: true });
     toast.success(
       isEdit ? 'Pointage modifié — planning mis à jour' : 'Pointage validé — planning mis à jour'
     );
@@ -255,6 +251,12 @@ function ValidateEditDialog({
             </p>
             <GeoSummary punch={punch} />
           </div>
+
+          {punch.note && (
+            <p className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+              Note employé : {punch.note}
+            </p>
+          )}
 
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div className="bg-slate-50 rounded-xl p-3">
@@ -372,17 +374,20 @@ function ValidateEditDialog({
   );
 }
 
+
 interface PunchRowProps {
   punch: PunchWithEmployee;
   onRefresh: () => void;
   onModifyClick: (p: PunchWithEmployee) => void;
-  /** En service : affichage seul, sans boutons d’action */
+  /** En service : pas de modifier/valider, mais annulation possible */
   readOnly?: boolean;
 }
 
 function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [acting, setActing] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const emp = punch.employees;
   const empName = emp
@@ -401,8 +406,30 @@ function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRo
   const canEdit = adminCanEditPunch(punch);
   const isAwaitingReview = ADMIN_ACTION_STATUSES.includes(punch.status);
   const isApproved = punch.status === 'approved';
+  const canCancel = ADMIN_CANCELLABLE_STATUSES.includes(punch.status);
   const showActions = !readOnly && canEdit && isAwaitingReview;
+  const showCancelInReview = !readOnly && canCancel && isAwaitingReview;
+  const showCancelInProgress = readOnly && canCancel;
   const expandable = !isApproved;
+
+  const handleCancelPunch = async () => {
+    setCancelling(true);
+    const supabase = createClient();
+    await clearScheduleValidatedIfAny(supabase, punch.employee_id, punch.date);
+    const { error } = await supabase
+      .from('time_declarations')
+      .delete()
+      .eq('id', punch.id);
+    setCancelling(false);
+    setCancelOpen(false);
+    if (error) {
+      toast.error('Impossible d’annuler le pointage.');
+      return;
+    }
+    void usePlanningStore.getState().loadData({ silent: true });
+    toast.success('Pointage annulé — l’employé peut pointer à nouveau ce jour-là.');
+    onRefresh();
+  };
 
   const handleQuickValidate = async () => {
     const { clockIn, clockOut } = getClockedTimes(punch);
@@ -438,7 +465,7 @@ function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRo
       times.start,
       times.end
     );
-    void usePlanningStore.getState().loadData();
+    void usePlanningStore.getState().loadData({ silent: true });
     toast.success('Pointage validé — planning mis à jour');
     setActing(false);
     onRefresh();
@@ -537,6 +564,12 @@ function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRo
             )}
           </div>
 
+          {punch.note && (
+            <p className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+              Note employé : {punch.note}
+            </p>
+          )}
+
           {punch.admin_note && (
             <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
               Note admin : {punch.admin_note}
@@ -569,16 +602,64 @@ function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRo
                 <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
                 Valider
               </Button>
+              {showCancelInReview && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-red-200 text-red-700 hover:bg-red-50"
+                  disabled={acting}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCancelOpen(true);
+                  }}
+                >
+                  <Trash2 className="w-3.5 h-3.5 mr-1" />
+                  Annuler le pointage
+                </Button>
+              )}
             </div>
-          )}
-
-          {readOnly && (
-            <p className="text-xs text-slate-400 italic">
-              En cours de service — modification possible une fois la journée terminée.
-            </p>
           )}
         </div>
       )}
+
+      {showCancelInProgress && (
+        <div className="border-t border-slate-100 px-4 py-3">
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-red-200 text-red-700 hover:bg-red-50"
+            onClick={() => setCancelOpen(true)}
+          >
+            <Trash2 className="w-3.5 h-3.5 mr-1" />
+            Annuler le pointage
+          </Button>
+        </div>
+      )}
+
+      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Annuler ce pointage ?</DialogTitle>
+            <DialogDescription>
+              Le pointage sera supprimé. L’employé pourra pointer à nouveau ce
+              jour-là s’il a travaillé.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelOpen(false)}>
+              Retour
+            </Button>
+            <Button
+              variant="outline"
+              className="border-red-200 text-red-700 hover:bg-red-50"
+              disabled={cancelling}
+              onClick={() => void handleCancelPunch()}
+            >
+              {cancelling ? 'Suppression…' : 'Supprimer le pointage'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -598,18 +679,37 @@ export default function PointagesAdminPage() {
     const supabase = createClient();
     await runAutoCloseStalePunches(supabase);
 
-    const { data, error } = await supabase
-      .from('time_declarations')
-      .select(
-        `id, employee_id, date, planned_start, planned_end,
+    const selectQuery = `
+        id, employee_id, date, planned_start, planned_end,
          clock_in_at, clock_out_at, actual_start, actual_end,
          status, pause_15min, had_snack, ate_work_food, auto_closed,
          admin_note, approved_start_mode, approved_end_mode, reviewed_at, note,
          clock_in_inside_geofence, clock_out_inside_geofence,
-         employees ( first_name, last_name, color )`
-      )
-      .order('date', { ascending: false })
-      .limit(200);
+         employees ( first_name, last_name, color )`;
+
+    const [{ data: priorityData }, { data: approvedData }] = await Promise.all([
+      supabase
+        .from('time_declarations')
+        .select(selectQuery)
+        .in('status', ADMIN_PRIORITY_PUNCH_STATUSES)
+        .order('date', { ascending: false }),
+      supabase
+        .from('time_declarations')
+        .select(selectQuery)
+        .eq('status', 'approved')
+        .order('date', { ascending: false })
+        .limit(200),
+    ]);
+
+    const merged = new Map<string, Record<string, unknown>>();
+    for (const row of [...(priorityData ?? []), ...(approvedData ?? [])]) {
+      merged.set((row as { id: string }).id, row as Record<string, unknown>);
+    }
+    const data = [...merged.values()].sort((a, b) =>
+      String(b.date).localeCompare(String(a.date))
+    );
+
+    const error = null;
 
     if (error) console.error(error);
     const rows = (data ?? []).map((row) => {
@@ -626,6 +726,7 @@ export default function PointagesAdminPage() {
     setPunches(rows);
     setLoading(false);
     setRefreshing(false);
+    notifyPointagesReviewUpdated();
   }, []);
 
   useEffect(() => {
@@ -676,7 +777,7 @@ export default function PointagesAdminPage() {
     <div className="flex flex-col min-h-screen bg-slate-50">
       <Header
         title="Pointages"
-        subtitle="Validez ou modifiez les heures pointées — les journées en cours sont en lecture seule"
+        subtitle="Validez les heures pointées ou annulez les erreurs"
       />
 
       <div className="flex-1 max-w-4xl mx-auto w-full p-6 space-y-5">

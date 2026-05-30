@@ -6,7 +6,9 @@
 import { createClient } from './client';
 import { supabaseErrorMessage } from './errorMessage';
 import { Employee, Shift, ScheduleEntry, AppSettings, WorkSiteGeofence, EmployeePosition } from '@/lib/types';
-import { getPositionLabel, inferPositionFromLegacyRole, parseEmployeePosition } from '@/lib/employeePosition';
+import { getPositionLabel, inferPositionFromLegacyRole, parseEmployeePosition, normalizeStoredAvailabilityStatus } from '@/lib/employeePosition';
+import { normalizeContractType } from '@/lib/utils';
+import { SWISS_DEFAULT_FULL_TIME_HOURS, SWISS_DEFAULT_MAX_WEEKLY_HOURS, SWISS_MIN_REST_HOURS } from '@/lib/swissLabor';
 import { format, parse, startOfMonth, endOfMonth } from 'date-fns';
 
 // ── Conversions Supabase (snake_case) ↔ App (camelCase) ──────
@@ -25,8 +27,8 @@ function dbToEmployee(row: any): Employee {
     phone: row.phone ?? '',
     color: row.color ?? '#6366F1',
     availability: row.availability ?? [],
-    contractType: row.contract_type ?? 'full-time',
-    contractHours: row.contract_hours ?? 35,
+    contractType: normalizeContractType(row.contract_type),
+    contractHours: row.contract_hours ?? SWISS_DEFAULT_FULL_TIME_HOURS,
     notes: row.notes ?? '',
     isActive: row.is_active ?? true,
     inactiveMonths: row.inactive_months ?? [],
@@ -123,8 +125,8 @@ function dbToSettings(row: any): AppSettings {
   return {
     companyName: row.company_name ?? 'Mon Entreprise',
     weekStartDay: row.week_start_day ?? 1,
-    minRestHours: row.min_rest_hours ?? 11,
-    maxWeeklyHours: row.max_weekly_hours ?? 48,
+    minRestHours: row.min_rest_hours ?? SWISS_MIN_REST_HOURS,
+    maxWeeklyHours: row.max_weekly_hours ?? SWISS_DEFAULT_MAX_WEEKLY_HOURS,
     locale: row.locale ?? 'fr-FR',
     timezone: row.timezone ?? 'Europe/Paris',
     theme: 'light',
@@ -134,6 +136,7 @@ function dbToSettings(row: any): AppSettings {
       overtime: true,
       unavailable: true,
       lowRest: true,
+      geofencePunch: true,
     },
     workSite,
   };
@@ -301,6 +304,7 @@ export const db = {
       overtime: Boolean(settings.notifications?.overtime ?? true),
       unavailable: Boolean(settings.notifications?.unavailable ?? true),
       lowRest: Boolean(settings.notifications?.lowRest ?? true),
+      geofencePunch: Boolean(settings.notifications?.geofencePunch ?? true),
     };
     const { error } = await supabase
       .from('app_settings')
@@ -368,8 +372,8 @@ export const db = {
         typeof r.date === 'string' && (r.date as string).length === 10
           ? (r.date as string)
           : format(new Date(r.date as string), 'yyyy-MM-dd'),
-      status: String((r as { status?: string }).status ?? ''),
-    }));
+      status: normalizeStoredAvailabilityStatus(String((r as { status?: string }).status ?? '')) ?? '',
+    })).filter((r) => r.status === 'vacation' || r.status === 'unavailable');
   },
 
   async getAvailabilityValidations(): Promise<{ employeeId: string; monthKey: string }[]> {

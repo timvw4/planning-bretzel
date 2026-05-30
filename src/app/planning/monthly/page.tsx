@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  RotateCcw,
   AlertTriangle,
   ZoomIn,
   ZoomOut,
@@ -14,7 +13,6 @@ import {
   Eraser,
   ChevronDown,
   Send,
-  Filter,
   CalendarRange,
 } from 'lucide-react';
 import {
@@ -54,9 +52,12 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
+import { PlanningEmployeeFilterDropdown } from '@/components/planning/PlanningEmployeeFilterDropdown';
+import { usePlanningEmployeeFilter } from '@/hooks/usePlanningEmployeeFilter';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
-import { getInitials, formatHours, formatDate, calcPickerPosition, getPlannedShiftTimeRange, calculateShiftDuration, availabilityStatusDisplay, availabilityMapKey, getPlannedEntryDurationHours } from '@/lib/utils';
+import { getInitials, formatHours, formatDate, calcPickerPosition, getPlannedShiftTimeRange, calculateShiftDuration, availabilityMapKey, getPlannedEntryDurationHours } from '@/lib/utils';
+import { AvailabilityStatusIcon, availabilityStatusMeta } from '@/components/availability/AvailabilityStatusIcon';
 import { getPositionLabel } from '@/lib/employeePosition';
 
 // ── Niveaux de zoom ──────────────────────────────────────────
@@ -112,9 +113,6 @@ export default function MonthlyPlanningPage() {
   const [zoomIdx, setZoomIdx]       = useState(DEFAULT_ZOOM);
   const [activeCell, setActiveCell] = useState<{ empId: string; date: string } | null>(null);
   const [pickerPos,  setPickerPos]  = useState<{ x: number; y: number } | null>(null);
-  /** 'all' = tous les employés actifs du mois ; 'subset' = liste dans selectedEmployeeIds */
-  const [employeeFilterMode, setEmployeeFilterMode] = useState<'all' | 'subset'>('all');
-  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   // ── Mode pinceau : shift sélectionné pour assignation rapide ─
   const [brushShiftId, setBrushShiftId] = useState<string | null>(null);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
@@ -155,48 +153,8 @@ export default function MonthlyPlanningPage() {
       ),
     [employees, monthKey]
   );
-  const employeesForFilterMenu = useMemo(
-    () =>
-      [...activeEmployees].sort((a, b) =>
-        a.firstName.localeCompare(b.firstName, 'fr', { sensitivity: 'base' })
-      ),
-    [activeEmployees]
-  );
 
-  const displayedEmployees = useMemo(() => {
-    if (employeeFilterMode === 'all') return activeEmployees;
-    return activeEmployees.filter((e) => new Set(selectedEmployeeIds).has(e.id));
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
-
-  const filterSummaryTitle = useMemo(() => {
-    const list =
-      employeeFilterMode === 'all'
-        ? activeEmployees
-        : activeEmployees.filter((e) => selectedEmployeeIds.includes(e.id));
-    return list
-      .map((e) => `${e.firstName}${e.lastName ? ` ${e.lastName}` : ''}`.trim())
-      .join(', ');
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
-
-  const filterSummaryLabel = useMemo(() => {
-    const n = activeEmployees.length;
-    if (n === 0) return 'Aucun employé actif';
-    if (employeeFilterMode === 'all') return `Tous les employés (${n})`;
-    const k = selectedEmployeeIds.length;
-    if (k === 0) return 'Aucun employé';
-    if (k === 1) {
-      const e = activeEmployees.find((x) => x.id === selectedEmployeeIds[0]);
-      return e
-        ? `${e.firstName}${e.lastName ? ` ${e.lastName}` : ''}`.trim()
-        : '1 employé';
-    }
-    return `${k} employés`;
-  }, [employeeFilterMode, selectedEmployeeIds, activeEmployees]);
-
-  /** Résumé complet pour l’info-bulle du bouton Filtre */
-  const unifiedFilterTitle = filterSummaryTitle || filterSummaryLabel;
-
-  const hasActiveFilters = employeeFilterMode === 'subset';
+  const { displayedEmployees } = usePlanningEmployeeFilter(activeEmployees);
 
   useEffect(() => {
     if (!dateParam) return;
@@ -207,63 +165,6 @@ export default function MonthlyPlanningPage() {
   useEffect(() => {
     void mergeAvailabilityRequests(availWindowFrom, availWindowTo);
   }, [availWindowFrom, availWindowTo, mergeAvailabilityRequests]);
-
-  useEffect(() => {
-    if (employeeFilterMode !== 'subset') return;
-    const valid = new Set(activeEmployees.map((e) => e.id));
-    setSelectedEmployeeIds((prev) => {
-      const pruned = prev.filter((id) => valid.has(id));
-      if (
-        pruned.length === activeEmployees.length &&
-        activeEmployees.length > 0 &&
-        activeEmployees.every((e) => pruned.includes(e.id))
-      ) {
-        queueMicrotask(() => setEmployeeFilterMode('all'));
-        return [];
-      }
-      return pruned;
-    });
-  }, [activeEmployees, monthKey, employeeFilterMode]);
-
-  const areAllEmployeesSelected =
-    employeeFilterMode === 'all' ||
-    (activeEmployees.length > 0 &&
-      activeEmployees.every((e) => selectedEmployeeIds.includes(e.id)));
-
-  const isEmployeeRowChecked = (id: string) =>
-    areAllEmployeesSelected || selectedEmployeeIds.includes(id);
-
-  const handleToggleAllEmployees = () => {
-    if (areAllEmployeesSelected) {
-      setEmployeeFilterMode('subset');
-      setSelectedEmployeeIds([]);
-    } else {
-      setEmployeeFilterMode('all');
-      setSelectedEmployeeIds([]);
-    }
-  };
-
-  const handleToggleOneEmployee = (id: string, checked: boolean) => {
-    if (areAllEmployeesSelected) {
-      if (!checked) {
-        setEmployeeFilterMode('subset');
-        setSelectedEmployeeIds(activeEmployees.map((e) => e.id).filter((x) => x !== id));
-      }
-      return;
-    }
-    if (checked) {
-      const next = Array.from(new Set([...selectedEmployeeIds, id]));
-      if (next.length === activeEmployees.length) {
-        setEmployeeFilterMode('all');
-        setSelectedEmployeeIds([]);
-      } else {
-        setSelectedEmployeeIds(next);
-      }
-    } else {
-      setEmployeeFilterMode('subset');
-      setSelectedEmployeeIds(selectedEmployeeIds.filter((x) => x !== id));
-    }
-  };
 
   const shiftMap = new Map(shifts.map((s) => [s.id, s]));
 
@@ -451,63 +352,6 @@ export default function MonthlyPlanningPage() {
         title="Planning prévu"
         actions={
           <div className="flex items-center gap-2">
-            {/* Filtre groupes + employés */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9 min-w-[7rem] justify-between gap-2 font-normal px-3"
-                  title={unifiedFilterTitle || undefined}
-                  disabled={activeEmployees.length === 0}
-                >
-                  <span className="flex items-center gap-2 min-w-0">
-                    <Filter className="h-4 w-4 shrink-0 text-slate-500" />
-                    <span className="text-sm text-slate-700">Filtre</span>
-                    {hasActiveFilters && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" aria-hidden />
-                    )}
-                  </span>
-                  <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-80 max-h-[min(24rem,70vh)] overflow-y-auto">
-                <DropdownMenuLabel className="text-xs font-semibold text-slate-500">
-                  Employés affichés
-                </DropdownMenuLabel>
-                <DropdownMenuCheckboxItem
-                  checked={areAllEmployeesSelected}
-                  onCheckedChange={handleToggleAllEmployees}
-                  onSelect={(e) => e.preventDefault()}
-                >
-                  Tous les employés ({activeEmployees.length})
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator />
-                {employeesForFilterMenu.map((e) => (
-                  <DropdownMenuCheckboxItem
-                    key={e.id}
-                    checked={isEmployeeRowChecked(e.id)}
-                    onCheckedChange={(c) => handleToggleOneEmployee(e.id, c === true)}
-                    onSelect={(ev) => ev.preventDefault()}
-                  >
-                    <span className="flex items-center gap-2 min-w-0 flex-1">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full shrink-0 ring-1 ring-black/5"
-                        style={{ backgroundColor: e.color }}
-                      />
-                      <span className="truncate">
-                        {e.firstName}
-                        {e.lastName ? ` ${e.lastName}` : ''}
-                      </span>
-                      <span className="text-[10px] text-slate-400 ml-auto shrink-0 tabular-nums">
-                        {getInitials(e.firstName, e.lastName)}
-                      </span>
-                    </span>
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
             <Button
               variant="default"
               size="sm"
@@ -593,9 +437,7 @@ export default function MonthlyPlanningPage() {
               <Button variant="ghost" size="icon" onClick={() => setCurrentMonth((m) => addMonths(m, 1))}>
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setCurrentMonth(new Date())} className="text-xs text-slate-500 ml-1">
-                <RotateCcw className="h-3.5 w-3.5" /> Aujourd'hui
-              </Button>
+              <PlanningEmployeeFilterDropdown activeEmployees={activeEmployees} />
               <Button
                 variant="outline"
                 size="sm"
@@ -893,7 +735,7 @@ export default function MonthlyPlanningPage() {
                       const isCurrentMonth = isSameMonth(day, currentMonth);
                       const isActive       = activeCell?.empId === employee.id && activeCell?.date === dateStr;
                       const cellAlerts     = getCellAlerts(employee.id, dateStr);
-                      const availDisp      = availabilityStatusDisplay(
+                      const availDisp = availabilityStatusMeta(
                         availabilityStatusByKey[availabilityMapKey(employee.id, dateStr)]
                       );
 
@@ -974,15 +816,17 @@ export default function MonthlyPlanningPage() {
                               <div className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-amber-500 rounded-full" />
                             )}
 
-                            {/* Indicateur disponibilité employé (★ / ✓ / ✗) — masqué au zoom minimal */}
+                            {/* Indicateur disponibilité employé — masqué au zoom minimal */}
                             {availDisp && zoom.id !== 'xs' && (
                               <span
-                                className={`absolute bottom-0.5 left-0.5 leading-none font-bold pointer-events-none drop-shadow-[0_0_1px_rgba(255,255,255,0.9)] ${availDisp.className} ${
-                                  zoom.cellMinW >= 52 ? 'text-[10px]' : 'text-[8px]'
-                                }`}
+                                className={`absolute bottom-0.5 left-0.5 leading-none pointer-events-none drop-shadow-[0_0_1px_rgba(255,255,255,0.9)] ${availDisp.className}`}
                                 title={availDisp.title}
                               >
-                                {availDisp.symbol}
+                                <AvailabilityStatusIcon
+                                  status={availDisp.displayStatus}
+                                  size={zoom.cellMinW >= 52 ? 10 : 8}
+                                  strokeWidth={2.75}
+                                />
                               </span>
                             )}
                           </div>
