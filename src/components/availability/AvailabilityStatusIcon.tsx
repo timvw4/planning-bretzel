@@ -25,7 +25,7 @@ export function availabilityStatusMeta(status: string | undefined | null): {
     case 'vacation':
       return {
         title: 'Disponibilité : Vacances',
-        className: 'text-sky-700',
+        className: 'text-amber-600',
         displayStatus,
       };
     case 'unavailable':

@@ -30,7 +30,7 @@ interface AvailabilityEntry {
 const EXCEPTION_CONFIG: Record<StoredAvailabilityStatus, {
   label: string; bg: string; text: string; border: string;
 }> = {
-  vacation:    { label: 'Vacances',     bg: '#DBEAFE', text: '#1D4ED8', border: '#93C5FD' },
+  vacation:    { label: 'Vacances',     bg: '#FEF3C7', text: '#D97706', border: '#FCD34D' },
   unavailable: { label: 'Indisponible', bg: '#FEE2E2', text: '#DC2626', border: '#FCA5A5' },
 };
 
@@ -192,6 +192,7 @@ export default function EmployeeAvailabilityPage() {
     }
     setAvailabilities(optimistic);
     setSyncingDate(dateStr);
+    setHoveredDate(null);
 
     const supabase = createClient();
     const { error } =
@@ -467,7 +468,7 @@ export default function EmployeeAvailabilityPage() {
 
             const bgColor = !isWorkDay
               ? undefined
-              : cfg?.bg ?? (isHovered && nextCfg ? nextCfg.bg + '30' : undefined);
+              : cfg?.bg ?? (exception && isHovered && nextCfg ? nextCfg.bg + '30' : undefined);
 
             return (
               <button
@@ -515,7 +516,9 @@ export default function EmployeeAvailabilityPage() {
                 </span>
 
                 <div className="flex-1 flex items-center justify-center">
-                  {exception && cfg ? (
+                  {!isWorkDay ? (
+                    <span className="text-[10px] text-slate-300">—</span>
+                  ) : exception && cfg && !(isHovered && nextStatus && nextCfg) ? (
                     <AvailabilityStatusIcon
                       status={exception}
                       size={18}
@@ -523,7 +526,7 @@ export default function EmployeeAvailabilityPage() {
                       className="shrink-0"
                       style={{ color: cfg.text }}
                     />
-                  ) : isHovered && nextStatus && nextCfg ? (
+                  ) : isHovered && exception && nextStatus && nextCfg ? (
                     <AvailabilityStatusIcon
                       status={nextStatus}
                       size={16}
@@ -531,8 +534,6 @@ export default function EmployeeAvailabilityPage() {
                       className="shrink-0 opacity-40"
                       style={{ color: nextCfg.text }}
                     />
-                  ) : !isWorkDay ? (
-                    <span className="text-[10px] text-slate-300">—</span>
                   ) : null}
                 </div>
 

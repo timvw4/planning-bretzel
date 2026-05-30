@@ -49,7 +49,7 @@ const EXCEPTION_CONFIG: Record<
   StoredAvailabilityStatus,
   { bg: string; text: string; label: string }
 > = {
-  vacation: { bg: '#DBEAFE', text: '#1D4ED8', label: 'Vacances' },
+  vacation: { bg: '#FEF3C7', text: '#D97706', label: 'Vacances' },
   unavailable: { bg: '#FEE2E2', text: '#DC2626', label: 'Indisponible' },
 };
 
