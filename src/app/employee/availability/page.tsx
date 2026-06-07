@@ -9,7 +9,8 @@ import {
 import { fr } from 'date-fns/locale';
 import { ChevronLeft, ChevronRight, Lock, CheckCircle, Clock, XCircle, Send, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
-import type { AvailabilityDay } from '@/lib/types';
+import type { AvailabilityDay, ContractType } from '@/lib/types';
+import { normalizeContractType } from '@/lib/utils';
 import { AvailabilityStatusIcon } from '@/components/availability/AvailabilityStatusIcon';
 import {
   formatWorkDaysSummary,
@@ -17,7 +18,9 @@ import {
   normalizeStoredAvailabilityStatus,
   getStoredAvailabilityOnWorkDay,
   getNextStoredAvailabilityStatus,
+  countAnnualVacationDays,
   type StoredAvailabilityStatus,
+  type AvailabilityExceptionMode,
 } from '@/lib/employeePosition';
 
 type MonthState = 'editable' | 'validated' | 'request_pending' | 'request_rejected';
@@ -34,7 +37,7 @@ const EXCEPTION_CONFIG: Record<StoredAvailabilityStatus, {
   unavailable: { label: 'Indisponible', bg: '#FEE2E2', text: '#DC2626', border: '#FCA5A5' },
 };
 
-// Cycle : jour normal → vacances → indispo → jour normal
+// Cycle : fixe = normal ↔ vacances ; à l’heure = normal ↔ indispo
 const WEEK_DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 
 // ── Squelette de chargement initial ─────────────────────────
@@ -80,6 +83,9 @@ export default function EmployeeAvailabilityPage() {
   const [employeeId, setEmployeeId] = useState<string | null>(null);
   /** Jours habituels définis par l’admin dans la fiche employé */
   const [workDays, setWorkDays] = useState<AvailabilityDay[]>([]);
+  const [contractType, setContractType] = useState<ContractType>('fixed');
+  const [annualVacationDays, setAnnualVacationDays] = useState(25);
+  const [yearVacationCount, setYearVacationCount] = useState(0);
   const [availabilities, setAvailabilities] = useState<Map<string, AvailabilityEntry>>(new Map());
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
@@ -101,6 +107,11 @@ export default function EmployeeAvailabilityPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const monthKey = format(currentDate, 'yyyy-MM');
+  const calendarYear = currentDate.getFullYear();
+  const isFixedContract = contractType === 'fixed';
+  const availabilityOptions = {
+    mode: (isFixedContract ? 'vacation_only' : 'unavailable_only') as AvailabilityExceptionMode,
+  };
 
   useEffect(() => {
     const supabase = createClient();
@@ -119,8 +130,10 @@ export default function EmployeeAvailabilityPage() {
     const supabase = createClient();
     const start = format(startOfMonth(currentDate), 'yyyy-MM-dd');
     const end = format(endOfMonth(currentDate), 'yyyy-MM-dd');
+    const yearStart = `${calendarYear}-01-01`;
+    const yearEnd = `${calendarYear}-12-31`;
 
-    const [{ data: avails }, { data: validation }, { data: unlockReq }, { data: empRow }] =
+    const [{ data: avails }, { data: validation }, { data: unlockReq }, { data: empRow }, { data: yearVacations }] =
       await Promise.all([
       supabase.from('availability_requests').select('date, status')
         .eq('employee_id', employeeId).gte('date', start).lte('date', end),
@@ -129,12 +142,22 @@ export default function EmployeeAvailabilityPage() {
       supabase.from('availability_unlock_requests').select('id, status')
         .eq('employee_id', employeeId).eq('month_key', monthKey)
         .order('requested_at', { ascending: false }).limit(1).maybeSingle(),
-      supabase.from('employees').select('availability')
+      supabase.from('employees').select('availability, contract_type, annual_vacation_days')
         .eq('id', employeeId).maybeSingle(),
+      supabase.from('availability_requests').select('date, status')
+        .eq('employee_id', employeeId)
+        .eq('status', 'vacation')
+        .gte('date', yearStart)
+        .lte('date', yearEnd),
     ]);
 
     const parsedWorkDays = (empRow?.availability ?? []) as AvailabilityDay[];
     setWorkDays(parsedWorkDays);
+    setContractType(normalizeContractType(empRow?.contract_type));
+    setAnnualVacationDays(empRow?.annual_vacation_days ?? 25);
+    setYearVacationCount(
+      countAnnualVacationDays(yearVacations ?? [], parsedWorkDays, calendarYear)
+    );
 
     const map = new Map<string, AvailabilityEntry>();
     (avails ?? []).forEach((row) => {
@@ -164,7 +187,7 @@ export default function EmployeeAvailabilityPage() {
 
     if (!initialLoadDone.current) { setLoading(false); initialLoadDone.current = true; }
     setIsFetching(false);
-  }, [employeeId, currentDate, monthKey]);
+  }, [employeeId, currentDate, monthKey, calendarYear]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -181,16 +204,30 @@ export default function EmployeeAvailabilityPage() {
     const current = getStoredAvailabilityOnWorkDay(day, workDays, stored);
     if (!isEmployeeWorkDay(day, workDays)) return;
 
-    const next = getNextStoredAvailabilityStatus(current);
+    const next = getNextStoredAvailabilityStatus(current, availabilityOptions);
+
+    if (next === 'vacation' && isFixedContract && yearVacationCount >= annualVacationDays) {
+      toast.error(
+        `Quota atteint : vous avez déjà posé ${annualVacationDays} jour${annualVacationDays > 1 ? 's' : ''} de vacances en ${calendarYear}.`
+      );
+      return;
+    }
+
     const snapshot = new Map(availabilities);
+    const snapshotYearCount = yearVacationCount;
     const optimistic = new Map(availabilities);
+    let nextYearCount = yearVacationCount;
 
     if (next === null) {
       optimistic.delete(dateStr);
+      if (current === 'vacation') nextYearCount -= 1;
     } else {
       optimistic.set(dateStr, { date: dateStr, status: next });
+      if (next === 'vacation') nextYearCount += 1;
+      else if (current === 'vacation') nextYearCount -= 1;
     }
     setAvailabilities(optimistic);
+    setYearVacationCount(nextYearCount);
     setSyncingDate(dateStr);
     setHoveredDate(null);
 
@@ -209,6 +246,7 @@ export default function EmployeeAvailabilityPage() {
 
     if (error) {
       setAvailabilities(snapshot);
+      setYearVacationCount(snapshotYearCount);
       toast.error('Erreur de sauvegarde, veuillez réessayer');
     }
     setSyncingDate(null);
@@ -280,19 +318,21 @@ export default function EmployeeAvailabilityPage() {
 
       {/* ── Bannière état du mois ─────────────────────────────── */}
       {monthState === 'validated' && (
-        <div className="bg-green-50 border border-green-200 rounded-2xl p-4 flex items-center justify-between gap-4 animate-stagger-1">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-green-100 rounded-xl flex items-center justify-center shrink-0">
-              <CheckCircle className="w-5 h-5 text-green-600" />
+        <div className="bg-green-50 border border-green-200 rounded-xl px-3 py-2 flex items-center justify-between gap-3 animate-stagger-1">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center shrink-0">
+                <CheckCircle className="w-4 h-4 text-green-600" />
+              </div>
+              <p className="text-sm font-bold text-green-800 leading-none">Mois validé</p>
             </div>
-            <div>
-              <p className="text-sm font-bold text-green-800">Mois validé</p>
-              <p className="text-xs text-green-600">Vos disponibilités sont verrouillées.</p>
-            </div>
+            <p className="text-[11px] text-green-600 leading-snug mt-1">
+              Vos disponibilités sont verrouillées.
+            </p>
           </div>
           <button
             onClick={() => setShowUnlockModal(true)}
-            className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-green-700 bg-green-100 hover:bg-green-200 transition-colors"
+            className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-green-700 bg-green-100 hover:bg-green-200 transition-colors"
           >
             <Send className="w-3.5 h-3.5" />
             Demander une modification
@@ -334,20 +374,53 @@ export default function EmployeeAvailabilityPage() {
       )}
 
       {/* ── Résumé exceptions ─────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3 animate-stagger-2">
-        {(Object.entries(EXCEPTION_CONFIG) as [StoredAvailabilityStatus, typeof EXCEPTION_CONFIG[StoredAvailabilityStatus]][]).map(([status, cfg]) => (
+      <div className="grid gap-3 animate-stagger-2 grid-cols-1 max-w-xs mx-auto w-full">
+        {isFixedContract ? (
           <div
-            key={status}
             className="rounded-2xl border p-3 text-center transition-all duration-300"
-            style={{ backgroundColor: cfg.bg + '55', borderColor: cfg.border }}
+            style={{
+              backgroundColor: EXCEPTION_CONFIG.vacation.bg + '55',
+              borderColor: EXCEPTION_CONFIG.vacation.border,
+            }}
           >
-            <p className="text-2xl font-bold tabular-nums" style={{ color: cfg.text }}>
-              {countExceptions(status)}
+            <p className="text-2xl font-bold tabular-nums" style={{ color: EXCEPTION_CONFIG.vacation.text }}>
+              {yearVacationCount} / {annualVacationDays}
             </p>
-            <p className="text-[11px] font-semibold mt-0.5" style={{ color: cfg.text }}>{cfg.label}</p>
+            <p className="text-[11px] font-semibold mt-0.5" style={{ color: EXCEPTION_CONFIG.vacation.text }}>
+              Vacances en {calendarYear}
+            </p>
+            <p className="text-[10px] mt-1 opacity-80" style={{ color: EXCEPTION_CONFIG.vacation.text }}>
+              {countExceptions('vacation')} ce mois-ci
+            </p>
           </div>
-        ))}
+        ) : (
+          <div
+            className="rounded-2xl border p-3 text-center transition-all duration-300"
+            style={{
+              backgroundColor: EXCEPTION_CONFIG.unavailable.bg + '55',
+              borderColor: EXCEPTION_CONFIG.unavailable.border,
+            }}
+          >
+            <p className="text-2xl font-bold tabular-nums" style={{ color: EXCEPTION_CONFIG.unavailable.text }}>
+              {countExceptions('unavailable')}
+            </p>
+            <p className="text-[11px] font-semibold mt-0.5" style={{ color: EXCEPTION_CONFIG.unavailable.text }}>
+              Indisponible{countExceptions('unavailable') > 1 ? 's' : ''} ce mois
+            </p>
+          </div>
+        )}
       </div>
+
+      {!isFixedContract && (
+        <p className="text-[11px] text-slate-400 text-center -mt-1 animate-stagger-2">
+          En tant qu&apos;employé à l&apos;heure, vous pouvez uniquement signaler vos indisponibilités.
+        </p>
+      )}
+      {isFixedContract && (
+        <p className="text-[11px] text-slate-400 text-center -mt-1 animate-stagger-2">
+          En tant que salarié fixe, vous pouvez uniquement poser vos jours de vacances (quota annuel).
+        </p>
+      )}
 
       {/* ── Calendrier ───────────────────────────────────────── */}
       <div
@@ -388,42 +461,49 @@ export default function EmployeeAvailabilityPage() {
             <span className="text-[10px] text-slate-400 font-medium">Cliquez vos jours habituels :</span>
             <span className="text-[10px] text-slate-500 font-medium">Normal</span>
             <span className="text-[10px] text-slate-300">→</span>
-            <span className="flex items-center gap-1">
-              <span
-                className="w-4 h-4 rounded-md flex items-center justify-center"
-                style={{
-                  backgroundColor: EXCEPTION_CONFIG.vacation.bg,
-                  color: EXCEPTION_CONFIG.vacation.text,
-                }}
-              >
-                <AvailabilityStatusIcon status="vacation" size={10} strokeWidth={2.5} />
-              </span>
-              <span
-                className="text-[10px] font-medium hidden sm:inline"
-                style={{ color: EXCEPTION_CONFIG.vacation.text }}
-              >
-                Vacances
-              </span>
-            </span>
-            <span className="text-[10px] text-slate-300">→</span>
-            <span className="flex items-center gap-1">
-              <span
-                className="w-4 h-4 rounded-md flex items-center justify-center"
-                style={{
-                  backgroundColor: EXCEPTION_CONFIG.unavailable.bg,
-                  color: EXCEPTION_CONFIG.unavailable.text,
-                }}
-              >
-                <AvailabilityStatusIcon status="unavailable" size={10} strokeWidth={3} />
-              </span>
-              <span
-                className="text-[10px] font-medium hidden sm:inline"
-                style={{ color: EXCEPTION_CONFIG.unavailable.text }}
-              >
-                Indispo
-              </span>
-            </span>
-            <span className="text-[10px] text-slate-300">→</span>
+            {isFixedContract ? (
+              <>
+                <span className="flex items-center gap-1">
+                  <span
+                    className="w-4 h-4 rounded-md flex items-center justify-center"
+                    style={{
+                      backgroundColor: EXCEPTION_CONFIG.vacation.bg,
+                      color: EXCEPTION_CONFIG.vacation.text,
+                    }}
+                  >
+                    <AvailabilityStatusIcon status="vacation" size={10} strokeWidth={2.5} />
+                  </span>
+                  <span
+                    className="text-[10px] font-medium hidden sm:inline"
+                    style={{ color: EXCEPTION_CONFIG.vacation.text }}
+                  >
+                    Vacances
+                  </span>
+                </span>
+                <span className="text-[10px] text-slate-300">→</span>
+              </>
+            ) : (
+              <>
+                <span className="flex items-center gap-1">
+                  <span
+                    className="w-4 h-4 rounded-md flex items-center justify-center"
+                    style={{
+                      backgroundColor: EXCEPTION_CONFIG.unavailable.bg,
+                      color: EXCEPTION_CONFIG.unavailable.text,
+                    }}
+                  >
+                    <AvailabilityStatusIcon status="unavailable" size={10} strokeWidth={3} />
+                  </span>
+                  <span
+                    className="text-[10px] font-medium hidden sm:inline"
+                    style={{ color: EXCEPTION_CONFIG.unavailable.text }}
+                  >
+                    Indispo
+                  </span>
+                </span>
+                <span className="text-[10px] text-slate-300">→</span>
+              </>
+            )}
             <span className="text-[10px] text-slate-500 font-medium">Normal</span>
           </div>
         )}
@@ -462,7 +542,7 @@ export default function EmployeeAvailabilityPage() {
             const isHovered = hoveredDate === dateStr && canEdit;
 
             const nextStatus = canEdit
-              ? getNextStoredAvailabilityStatus(exception)
+              ? getNextStoredAvailabilityStatus(exception, availabilityOptions)
               : null;
             const nextCfg = nextStatus ? EXCEPTION_CONFIG[nextStatus] : null;
 
@@ -526,7 +606,7 @@ export default function EmployeeAvailabilityPage() {
                       className="shrink-0"
                       style={{ color: cfg.text }}
                     />
-                  ) : isHovered && exception && nextStatus && nextCfg ? (
+                  ) : isHovered && nextStatus && nextCfg ? (
                     <AvailabilityStatusIcon
                       status={nextStatus}
                       size={16}
@@ -561,7 +641,9 @@ export default function EmployeeAvailabilityPage() {
         {isLocked
           ? 'Ce mois est verrouillé. Demandez une modification à votre responsable.'
           : workDays.length > 0
-          ? 'Marquez vos vacances ou indisponibilités sur vos jours habituels, puis validez avant le début du mois.'
+          ? isFixedContract
+            ? 'Posez vos vacances sur vos jours habituels (quota annuel), puis validez avant le début du mois.'
+            : 'Signalez vos indisponibilités sur vos jours habituels, puis validez avant le début du mois.'
           : 'En attente de configuration de vos jours habituels par votre responsable.'}
       </p>
 
@@ -577,7 +659,9 @@ export default function EmployeeAvailabilityPage() {
               Vos disponibilités pour{' '}
               <strong className="text-slate-700">{format(currentDate, 'MMMM yyyy', { locale: fr })}</strong>{' '}
               seront verrouillées ({workDaysSummary || 'jours habituels'}).
-              Seules vos exceptions (vacances, indisponibilités) sont enregistrées.
+              {isFixedContract
+                ? ' Seuls vos jours de vacances sont enregistrés.'
+                : ' Seules vos indisponibilités sont enregistrées.'}
               Pour les modifier ensuite, il faudra en faire la demande.
             </p>
             <div className="flex gap-3">

@@ -33,6 +33,7 @@ import { EmployeeModal } from '@/components/employees/EmployeeModal';
 import { usePlanningStore } from '@/lib/store';
 import { Employee } from '@/lib/types';
 import { getInitials, formatDate, DAY_NAMES_FR, CONTRACT_TYPES, CONTRACT_LABELS, getContractLabel, formatHours } from '@/lib/utils';
+import { supabaseErrorMessage } from '@/lib/supabase/errorMessage';
 import { getPositionLabel, POSITION_RULES } from '@/lib/employeePosition';
 import {
   format,
@@ -88,16 +89,20 @@ export default function EmployeesPage() {
     });
   }, [employees, search, filterContract, filterPosition]);
 
-  const handleSave = (data: Omit<Employee, 'id' | 'createdAt'>) => {
-    if (editingEmployee) {
-      updateEmployee(editingEmployee.id, data);
-      toast.success(`${data.firstName} ${data.lastName} mis à jour`);
-    } else {
-      addEmployee(data);
-      toast.success(`${data.firstName} ${data.lastName} ajouté(e)`);
+  const handleSave = async (data: Omit<Employee, 'id' | 'createdAt'>) => {
+    try {
+      if (editingEmployee) {
+        await updateEmployee(editingEmployee.id, data);
+        toast.success(`${data.firstName} ${data.lastName} mis à jour`);
+      } else {
+        await addEmployee(data);
+        toast.success(`${data.firstName} ${data.lastName} ajouté(e)`);
+      }
+      setModalOpen(false);
+      setEditingEmployee(null);
+    } catch (err) {
+      toast.error(supabaseErrorMessage(err));
     }
-    setModalOpen(false);
-    setEditingEmployee(null);
   };
 
   const handleEdit = (emp: Employee) => {
@@ -337,6 +342,11 @@ export default function EmployeesPage() {
                         <p className="text-[10px] text-slate-400 uppercase tracking-wide">Contrat</p>
                         <p className="text-xs font-medium text-slate-700 mt-0.5">
                           {getContractLabel(emp.contractType)} · {emp.contractHours}h/sem
+                          {emp.contractType === 'fixed' && (
+                            <span className="text-slate-400">
+                              {' '}· {emp.annualVacationDays} j vacances/an
+                            </span>
+                          )}
                         </p>
                       </div>
                       <div className="text-right">

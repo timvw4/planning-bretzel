@@ -21,6 +21,8 @@ export interface Employee {
   availability: AvailabilityDay[];
   contractType: ContractType;
   contractHours: number;   // Heures contractuelles par semaine
+  /** Quota vacances annuel (jours habituels) — appliqué si contractType === 'fixed'. */
+  annualVacationDays: number;
   notes: string;
   isActive: boolean;
   inactiveMonths: string[];  // Clés 'yyyy-MM' des mois où l'employé est désactivé

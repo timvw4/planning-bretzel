@@ -42,6 +42,7 @@ import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
 import { PlanningEmployeeFilterDropdown } from '@/components/planning/PlanningEmployeeFilterDropdown';
 import { usePlanningEmployeeFilter } from '@/hooks/usePlanningEmployeeFilter';
+import { usePlanningDeepLink } from '@/hooks/usePlanningDeepLink';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -73,6 +74,7 @@ export default function WeeklyPlanningPage() {
     getWeeklyHours,
     copyWeek,
     alerts,
+    resolvedAlertIds,
     settings,
     publishWeekForEmployees,
     availabilityStatusByKey,
@@ -87,6 +89,7 @@ export default function WeeklyPlanningPage() {
       getWeeklyHours: s.getWeeklyHours,
       copyWeek: s.copyWeek,
       alerts: s.alerts,
+      resolvedAlertIds: s.resolvedAlertIds,
       settings: s.settings,
       publishWeekForEmployees: s.publishWeekForEmployees,
       availabilityStatusByKey: s.availabilityStatusByKey,
@@ -126,6 +129,7 @@ export default function WeeklyPlanningPage() {
   );
 
   const { displayedEmployees } = usePlanningEmployeeFilter(activeEmployees);
+  const { isFocusedCell } = usePlanningDeepLink(activeEmployees);
 
   const shiftMap = new Map(shifts.map((s) => [s.id, s]));
   const holidayMap = new Map((settings.holidays ?? []).map((h) => [h.date, h.name]));
@@ -136,12 +140,14 @@ export default function WeeklyPlanningPage() {
   );
 
   const activeAlerts = useMemo(() => {
+    const resolvedIds = new Set(resolvedAlertIds);
     const merged = new Map<string, PlanningAlert>();
     for (const alert of viewedWeekAlerts) {
+      if (resolvedIds.has(alert.id)) continue;
       merged.set(alert.id, alert);
     }
     for (const alert of alerts) {
-      if (alert.resolved) continue;
+      if (alert.resolved || resolvedIds.has(alert.id)) continue;
       if (
         alert.type === 'validated_unavailable' &&
         alert.date &&
@@ -155,7 +161,7 @@ export default function WeeklyPlanningPage() {
       }
     }
     return [...merged.values()];
-  }, [viewedWeekAlerts, alerts, weekStartStr, weekEndStr]);
+  }, [viewedWeekAlerts, alerts, resolvedAlertIds, weekStartStr, weekEndStr]);
 
   useEffect(() => {
     void mergeAvailabilityRequests(weekStartStr, weekEndStr);
@@ -586,6 +592,7 @@ export default function WeeklyPlanningPage() {
                       const isHolidayCell = holidayMap.has(dateStr);
                       const isActive =
                         activeCell?.empId === employee.id && activeCell?.date === dateStr;
+                      const isFocused = isFocusedCell(employee.id, dateStr);
                       const cellAlerts = getCellAlerts(employee.id, dateStr);
                       const availDisp = availabilityStatusMeta(
                         availabilityStatusByKey[availabilityMapKey(employee.id, dateStr)]
@@ -594,6 +601,7 @@ export default function WeeklyPlanningPage() {
                       return (
                         <td
                           key={dateStr}
+                          data-planning-cell={`${employee.id}|${dateStr}`}
                           className={`border-r border-slate-100 px-2 py-2 cursor-pointer ${
                             isHolidayCell && !shift ? 'bg-amber-50/40' : isWE && !shift ? 'bg-slate-50/30' : ''
                           } ${isTd ? 'bg-indigo-50/20' : ''}`}
@@ -605,6 +613,8 @@ export default function WeeklyPlanningPage() {
                             className={`relative min-h-[44px] sm:min-h-[60px] rounded-xl flex flex-col items-center justify-center transition-all duration-150 ${
                               isActive
                                 ? 'ring-2 ring-indigo-500 bg-indigo-50'
+                                : isFocused
+                                ? 'ring-2 ring-amber-400 bg-amber-50/80 animate-pulse'
                                 : hoveredCell?.empId === employee.id &&
                                   hoveredCell?.date === dateStr
                                 ? 'bg-slate-100'

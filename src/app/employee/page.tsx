@@ -32,6 +32,8 @@ interface Shift {
 
 interface ScheduleEntry {
   date: string;
+  validatedStart: string | null;
+  validatedEnd: string | null;
   shift: Shift;
 }
 
@@ -159,6 +161,8 @@ export default function EmployeeSchedulePage() {
             : (row.shifts.duration_hours ?? 0);
         return {
           date: row.date,
+          validatedStart: row.validated_start ?? null,
+          validatedEnd: row.validated_end ?? null,
           shift: {
             id: row.shifts.id,
             name: row.shifts.name,
@@ -249,7 +253,13 @@ export default function EmployeeSchedulePage() {
       ? entries.filter((e) => e.date >= weekStartStr && e.date <= weekEndStr)
       : entries.filter((e) => e.date >= monthStartStr && e.date <= monthEndStr);
   const statsPeriodLabel = viewMode === 'week' ? 'cette semaine' : 'ce mois';
-  const totalHours = entriesForStats.reduce((s, e) => s + (e.shift.durationHours ?? 0), 0);
+  const totalHours = entriesForStats.reduce(
+    (s, e) =>
+      e.validatedStart && e.validatedEnd
+        ? s + calculateShiftDuration(e.validatedStart, e.validatedEnd)
+        : s,
+    0
+  );
   const workedDays = entriesForStats.filter((e) => e.shift.type === 'work').length;
   const offDays = entriesForStats.filter((e) => e.shift.type === 'off').length;
 
@@ -314,7 +324,7 @@ export default function EmployeeSchedulePage() {
             <span className="text-[11px] font-semibold uppercase tracking-wide">Heures</span>
           </div>
           <p className="text-2xl font-bold text-slate-800">{formatHours(totalHours)}</p>
-          <p className="text-xs text-slate-400 mt-0.5">{statsPeriodLabel}</p>
+          <p className="text-xs text-slate-400 mt-0.5">validées · {statsPeriodLabel}</p>
         </div>
         <div className="bg-white rounded-2xl border border-slate-100 p-4">
           <div className="flex items-center gap-1.5 text-slate-400 mb-1">

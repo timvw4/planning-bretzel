@@ -3,8 +3,9 @@
 import { Bell, AlertTriangle, AlertCircle, Info, Check, CheckCheck, X } from 'lucide-react';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
-import { formatDate } from '@/lib/utils';
+import { formatDate, getPlanningAlertNavigationHref, canNavigateFromPlanningAlert } from '@/lib/utils';
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { PlanningAlert } from '@/lib/types';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -37,10 +38,12 @@ const SEVERITY_BG: Record<PlanningAlert['severity'], string> = {
 };
 
 export function Header({ title, subtitle, actions }: HeaderProps) {
-  const { alerts, resolveAlert, employees } = usePlanningStore(
+  const router = useRouter();
+  const { alerts, resolveAlert, resolveAlerts, employees } = usePlanningStore(
     useShallow((s) => ({
       alerts: s.alerts,
       resolveAlert: s.resolveAlert,
+      resolveAlerts: s.resolveAlerts,
       employees: s.employees,
     }))
   );
@@ -70,7 +73,14 @@ export function Header({ title, subtitle, actions }: HeaderProps) {
   }, []);
 
   const handleResolveAll = () => {
-    activeAlerts.forEach((a) => resolveAlert(a.id));
+    resolveAlerts(activeAlerts.map((a) => a.id));
+  };
+
+  const handleAlertNavigate = (alert: PlanningAlert) => {
+    const href = getPlanningAlertNavigationHref(alert);
+    if (!href) return;
+    setOpen(false);
+    router.push(href);
   };
 
   const getEmployeeName = (employeeId?: string) => {
@@ -190,10 +200,28 @@ export function Header({ title, subtitle, actions }: HeaderProps) {
                       const dateLabel = alert.date
                         ? format(parseISO(alert.date), 'd MMM', { locale: fr })
                         : null;
+                      const canNavigate = canNavigateFromPlanningAlert(alert);
                       return (
                         <div
                           key={alert.id}
-                          className={`flex items-start gap-2.5 rounded-xl border p-3 ${SEVERITY_BG[alert.severity]}`}
+                          role={canNavigate ? 'button' : undefined}
+                          tabIndex={canNavigate ? 0 : undefined}
+                          onClick={canNavigate ? () => handleAlertNavigate(alert) : undefined}
+                          onKeyDown={
+                            canNavigate
+                              ? (e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    handleAlertNavigate(alert);
+                                  }
+                                }
+                              : undefined
+                          }
+                          className={`flex items-start gap-2.5 rounded-xl border p-3 ${SEVERITY_BG[alert.severity]} ${
+                            canNavigate
+                              ? 'cursor-pointer hover:brightness-[0.98] hover:shadow-sm transition-all'
+                              : ''
+                          }`}
                         >
                           <AlertIcon severity={alert.severity} />
                           <div className="flex-1 min-w-0">
@@ -211,11 +239,19 @@ export function Header({ title, subtitle, actions }: HeaderProps) {
                               }`}>
                                 {SEVERITY_LABEL[alert.severity]}
                               </span>
+                              {canNavigate && (
+                                <span className="text-[10px] font-medium text-indigo-600">
+                                  Voir dans le planning →
+                                </span>
+                              )}
                             </div>
                           </div>
                           {!alert.resolved && (
                             <button
-                              onClick={() => resolveAlert(alert.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                resolveAlert(alert.id);
+                              }}
                               title="Marquer comme résolue"
                               className="shrink-0 h-6 w-6 flex items-center justify-center rounded-md text-slate-300 hover:text-green-500 hover:bg-white transition-colors"
                             >

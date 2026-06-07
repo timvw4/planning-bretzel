@@ -135,6 +135,9 @@ function ValidateEditDialog({
   const [endMode, setEndMode] = useState<ApprovedTimeMode>('actual');
   const [overrideStart, setOverrideStart] = useState('');
   const [overrideEnd, setOverrideEnd] = useState('');
+  const [pause15min, setPause15min] = useState(true);
+  const [hadSnack, setHadSnack] = useState(false);
+  const [ateWorkFood, setAteWorkFood] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const isEdit = punch?.status === 'approved';
@@ -148,22 +151,32 @@ function ValidateEditDialog({
       punch.actual_start ?? clockIn ?? punch.planned_start ?? ''
     );
     setOverrideEnd(punch.actual_end ?? clockOut ?? punch.planned_end ?? '');
+    setPause15min(punch.pause_15min ?? true);
+    setHadSnack(punch.had_snack ?? false);
+    setAteWorkFood(punch.ate_work_food ?? false);
   }, [punch, open]);
 
-  useEffect(() => {
+  const applyStartMode = (mode: ApprovedTimeMode) => {
     if (!punch) return;
-    const { clockIn, clockOut } = getClockedTimes(punch);
-    if (startMode === 'planned') {
-      setOverrideStart(punch.planned_start ?? clockIn ?? '');
-    } else {
-      setOverrideStart(clockIn ?? punch.planned_start ?? '');
-    }
-    if (endMode === 'planned') {
-      setOverrideEnd(punch.planned_end ?? clockOut ?? '');
-    } else {
-      setOverrideEnd(clockOut ?? punch.planned_end ?? '');
-    }
-  }, [startMode, endMode, punch]);
+    const { clockIn } = getClockedTimes(punch);
+    setStartMode(mode);
+    setOverrideStart(
+      mode === 'planned'
+        ? punch.planned_start ?? clockIn ?? ''
+        : clockIn ?? punch.planned_start ?? ''
+    );
+  };
+
+  const applyEndMode = (mode: ApprovedTimeMode) => {
+    if (!punch) return;
+    const { clockOut } = getClockedTimes(punch);
+    setEndMode(mode);
+    setOverrideEnd(
+      mode === 'planned'
+        ? punch.planned_end ?? clockOut ?? ''
+        : clockOut ?? punch.planned_end ?? ''
+    );
+  };
 
   if (!punch) return null;
 
@@ -191,6 +204,9 @@ function ValidateEditDialog({
       approved_end_mode: endMode,
       actual_start: preview.start,
       actual_end: preview.end,
+      pause_15min: pause15min,
+      had_snack: hadSnack,
+      ate_work_food: ateWorkFood,
     };
     if (needsManualEnd && !punch.clock_out_at) {
       payload.clock_out_at = now;
@@ -225,135 +241,170 @@ function ValidateEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[min(90dvh,calc(100vh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+        <DialogHeader className="shrink-0 space-y-1 px-6 pb-3 pt-6 pr-12">
           <DialogTitle>Modifier le pointage</DialogTitle>
-          <DialogDescription>
-            Ajustez les heures retenues pour le planning si nécessaire.
+          <DialogDescription className="capitalize">
+            {format(parseISO(punch.date), 'EEEE d MMMM yyyy', { locale: fr })}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 text-sm">
-          {punch.auto_closed && (
-            <p className="text-xs text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
-              Clôture automatique après 12 h — vérifiez l’heure de fin.
-            </p>
-          )}
-          {needsManualEnd && !clockOut && (
-            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              Sortie non pointée par l’employé : saisissez l’heure de fin ci-dessous.
-            </p>
-          )}
-
-          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-2">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
-              Périmètre GPS
-            </p>
-            <GeoSummary punch={punch} />
-          </div>
-
-          {punch.note && (
-            <p className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
-              Note employé : {punch.note}
-            </p>
-          )}
-
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="bg-slate-50 rounded-xl p-3">
-              <p className="font-bold text-slate-400 uppercase tracking-wide mb-1">
-                Prévu
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-4">
+          <div className="space-y-3 text-sm">
+            {punch.auto_closed && (
+              <p className="text-xs text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+                Clôture automatique après 12 h — vérifiez l’heure de fin.
               </p>
-              <p className="font-semibold text-slate-700">
-                {punch.planned_start ?? '—'} – {punch.planned_end ?? '—'}
+            )}
+            {needsManualEnd && !clockOut && (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                Sortie non pointée par l’employé : saisissez l’heure de fin ci-dessous.
               </p>
-            </div>
-            <div className="bg-slate-50 rounded-xl p-3">
-              <p className="font-bold text-slate-400 uppercase tracking-wide mb-1">
-                Pointé
+            )}
+
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-2">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                Périmètre GPS
               </p>
-              <p className="font-semibold text-slate-700">
-                {clockIn ?? '—'} – {clockOut ?? '—'}
+              <GeoSummary punch={punch} />
+            </div>
+
+            {punch.note && (
+              <p className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                Note employé : {punch.note}
               </p>
-            </div>
-          </div>
+            )}
 
-          <div className="space-y-2">
-            <p className="text-xs font-semibold text-slate-500">Heure d’arrivée</p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setStartMode('planned')}
-                className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold ${
-                  startMode === 'planned'
-                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                    : 'border-slate-200 text-slate-600'
-                }`}
-              >
-                Prévu ({punch.planned_start ?? '—'})
-              </button>
-              <button
-                type="button"
-                onClick={() => setStartMode('actual')}
-                className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold ${
-                  startMode === 'actual'
-                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                    : 'border-slate-200 text-slate-600'
-                }`}
-              >
-                Pointé ({clockIn ?? '—'})
-              </button>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="bg-slate-50 rounded-xl p-2.5">
+                <p className="font-bold text-slate-400 uppercase tracking-wide mb-1">
+                  Prévu
+                </p>
+                <p className="font-semibold text-slate-700">
+                  {punch.planned_start ?? '—'} – {punch.planned_end ?? '—'}
+                </p>
+              </div>
+              <div className="bg-slate-50 rounded-xl p-2.5">
+                <p className="font-bold text-slate-400 uppercase tracking-wide mb-1">
+                  Pointé
+                </p>
+                <p className="font-semibold text-slate-700">
+                  {clockIn ?? '—'} – {clockOut ?? '—'}
+                </p>
+              </div>
             </div>
-            <input
-              type="time"
-              value={overrideStart}
-              onChange={(e) => setOverrideStart(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-            />
-          </div>
 
-          <div className="space-y-2">
-            <p className="text-xs font-semibold text-slate-500">Heure de départ</p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setEndMode('planned')}
-                className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold ${
-                  endMode === 'planned'
-                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                    : 'border-slate-200 text-slate-600'
-                }`}
-              >
-                Prévu ({punch.planned_end ?? '—'})
-              </button>
-              <button
-                type="button"
-                onClick={() => setEndMode('actual')}
-                className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold ${
-                  endMode === 'actual'
-                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                    : 'border-slate-200 text-slate-600'
-                }`}
-              >
-                Pointé ({clockOut ?? '—'})
-              </button>
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-slate-500">Heure d’arrivée</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => applyStartMode('planned')}
+                  className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold ${
+                    startMode === 'planned'
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-200 text-slate-600'
+                  }`}
+                >
+                  Prévu ({punch.planned_start ?? '—'})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyStartMode('actual')}
+                  className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold ${
+                    startMode === 'actual'
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-200 text-slate-600'
+                  }`}
+                >
+                  Pointé ({clockIn ?? '—'})
+                </button>
+              </div>
+              <input
+                type="time"
+                value={overrideStart}
+                onChange={(e) => setOverrideStart(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+              />
             </div>
-            <input
-              type="time"
-              value={overrideEnd}
-              onChange={(e) => setOverrideEnd(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-            />
-          </div>
 
-          <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
-            Retenu pour le planning :{' '}
-            <strong>
-              {preview.start} – {preview.end}
-            </strong>
-          </p>
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-slate-500">Heure de départ</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => applyEndMode('planned')}
+                  className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold ${
+                    endMode === 'planned'
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-200 text-slate-600'
+                  }`}
+                >
+                  Prévu ({punch.planned_end ?? '—'})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyEndMode('actual')}
+                  className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold ${
+                    endMode === 'actual'
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-200 text-slate-600'
+                  }`}
+                >
+                  Pointé ({clockOut ?? '—'})
+                </button>
+              </div>
+              <input
+                type="time"
+                value={overrideEnd}
+                onChange={(e) => setOverrideEnd(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+              />
+            </div>
+
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-2">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                Pause &amp; repas
+              </p>
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={pause15min}
+                  onChange={(e) => setPause15min(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+                />
+                <span className="text-sm text-slate-700">Pause 15 min</span>
+              </label>
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={hadSnack}
+                  onChange={(e) => setHadSnack(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+                />
+                <span className="text-sm text-slate-700">Collation</span>
+              </label>
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={ateWorkFood}
+                  onChange={(e) => setAteWorkFood(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+                />
+                <span className="text-sm text-slate-700">Repas travail</span>
+              </label>
+            </div>
+
+            <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
+              Retenu pour le planning :{' '}
+              <strong>
+                {preview.start} – {preview.end}
+              </strong>
+            </p>
+          </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t border-slate-100 bg-white px-6 py-4">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Annuler
           </Button>

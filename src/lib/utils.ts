@@ -363,6 +363,18 @@ export function detectValidatedAvailabilityConflicts(
 export type AvailabilityRequestRow = { employeeId: string; date: string; status: string };
 export type AvailabilityValidationRow = { employeeId: string; monthKey: string };
 
+/** Applique le statut résolu aux alertes dont l’ID est en base. */
+export function applyResolvedPlanningAlerts(
+  alerts: PlanningAlert[],
+  resolvedIds: string[]
+): PlanningAlert[] {
+  if (resolvedIds.length === 0) return alerts;
+  const resolvedSet = new Set(resolvedIds);
+  return alerts.map((a) =>
+    resolvedSet.has(a.id) ? { ...a, resolved: true } : a
+  );
+}
+
 /** Alertes hebdo + conflits dispo / mois validé (charge initiale et refresh). */
 export function buildPlanningAlerts(
   employees: Employee[],
@@ -551,4 +563,26 @@ export function normalizeContractType(raw: string | null | undefined): ContractT
   };
   if (raw && raw in map) return map[raw];
   return 'fixed';
+}
+
+/** Lien admin pour ouvrir le planning au bon endroit depuis une alerte. */
+export function getPlanningAlertNavigationHref(alert: PlanningAlert): string | null {
+  if (alert.type === 'geofence_clock_in' || alert.type === 'geofence_clock_out') {
+    return '/pointages';
+  }
+
+  if (!alert.date) return null;
+
+  const params = new URLSearchParams({ date: alert.date });
+  if (alert.employeeId) params.set('employee', alert.employeeId);
+
+  if (alert.type === 'overtime') {
+    return `/planning/weekly?${params.toString()}`;
+  }
+
+  return `/planning/monthly?${params.toString()}`;
+}
+
+export function canNavigateFromPlanningAlert(alert: PlanningAlert): boolean {
+  return getPlanningAlertNavigationHref(alert) !== null;
 }

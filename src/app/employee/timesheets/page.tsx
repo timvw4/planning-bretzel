@@ -35,6 +35,7 @@ import {
   normalizePunchGeoResult,
   loadWorkSiteFence,
   runAutoCloseStalePunches,
+  getClockedTimes,
   timestampToHHMM,
   PUNCH_STATUS_LABEL,
 } from '@/lib/timePunches';
@@ -79,6 +80,8 @@ const STATUS_STYLE: Record<
     icon: AlertCircle,
   },
 };
+
+const RECENT_DAYS_LOOKBACK = 7;
 
 function PageSkeleton() {
   return (
@@ -130,8 +133,9 @@ export default function EmployeeTimesheetsPage() {
 
     const dates = [
       todayStr,
-      format(subDays(new Date(), 1), 'yyyy-MM-dd'),
-      format(subDays(new Date(), 2), 'yyyy-MM-dd'),
+      ...Array.from({ length: RECENT_DAYS_LOOKBACK }, (_, i) =>
+        format(subDays(new Date(), i + 1), 'yyyy-MM-dd')
+      ),
     ];
     const from = dates[dates.length - 1]!;
     const to = dates[0]!;
@@ -183,7 +187,7 @@ export default function EmployeeTimesheetsPage() {
 
     setTodayCtx(buildCtx(todayStr));
     setRecentDays(
-      dates.slice(1).map(buildCtx).filter((d) => d.shift || d.punch)
+      dates.slice(1).map(buildCtx).filter((d) => d.punch)
     );
     setLoading(false);
   }, [employeeId, todayStr]);
@@ -427,7 +431,7 @@ export default function EmployeeTimesheetsPage() {
         )}
       </div>
 
-      {/* ── Mini historique (2–3 jours) ───────────────────── */}
+      {/* ── Mini historique (7 jours) ─────────────────────── */}
       {recentDays.length > 0 && (
         <div className="space-y-2">
           <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide px-1">
@@ -436,15 +440,16 @@ export default function EmployeeTimesheetsPage() {
           {recentDays.map((day) => {
             const d = parseISO(day.date);
             const st = day.punch?.status;
-            if (!st) return null;
+            if (!st || !day.punch) return null;
             const style = STATUS_STYLE[st];
-            const Icon = style.icon;
+            const StatusIcon = style.icon;
+            const { clockIn, clockOut } = getClockedTimes(day.punch);
             return (
               <div
                 key={day.date}
-                className="flex items-center justify-between bg-white rounded-xl border border-slate-100 px-4 py-3"
+                className="flex items-start justify-between gap-3 bg-white rounded-xl border border-slate-100 px-4 py-3"
               >
-                <div>
+                <div className="min-w-0 space-y-1">
                   <p className="text-sm font-medium text-slate-800 capitalize">
                     {format(d, 'EEE d MMM', { locale: fr })}
                   </p>
@@ -454,11 +459,17 @@ export default function EmployeeTimesheetsPage() {
                       {day.shift.endTime}
                     </p>
                   )}
+                  <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                    <LogIn className="w-3 h-3 shrink-0 text-slate-400" />
+                    <span>{clockIn ?? '—'}</span>
+                    <LogOut className="w-3 h-3 shrink-0 text-slate-400 ml-0.5" />
+                    <span>{clockOut ?? '—'}</span>
+                  </div>
                 </div>
                 <span
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold ${style.pill}`}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold shrink-0 ${style.pill}`}
                 >
-                  <Icon className="w-3 h-3" />
+                  <StatusIcon className="w-3 h-3" />
                   {PUNCH_STATUS_LABEL[st]}
                 </span>
               </div>

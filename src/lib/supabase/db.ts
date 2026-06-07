@@ -29,6 +29,7 @@ function dbToEmployee(row: any): Employee {
     availability: row.availability ?? [],
     contractType: normalizeContractType(row.contract_type),
     contractHours: row.contract_hours ?? SWISS_DEFAULT_FULL_TIME_HOURS,
+    annualVacationDays: row.annual_vacation_days ?? 25,
     notes: row.notes ?? '',
     isActive: row.is_active ?? true,
     inactiveMonths: row.inactive_months ?? [],
@@ -49,6 +50,7 @@ function employeeToDb(e: Employee) {
     availability: e.availability,
     contract_type: e.contractType,
     contract_hours: e.contractHours,
+    annual_vacation_days: e.annualVacationDays ?? 25,
     notes: e.notes,
     is_active: e.isActive,
     inactive_months: e.inactiveMonths,
@@ -386,5 +388,45 @@ export const db = {
       employeeId: r.employee_id as string,
       monthKey: r.month_key as string,
     }));
+  },
+
+  /** IDs d'alertes marquées résolues (persistées Supabase). */
+  async getResolvedPlanningAlertIds(): Promise<string[]> {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from('resolved_planning_alerts')
+      .select('alert_id');
+    if (error) throw error;
+    return (data ?? []).map((r) => r.alert_id as string);
+  },
+
+  async markPlanningAlertResolved(alertId: string): Promise<void> {
+    const supabase = createClient();
+    const { data: userData } = await supabase.auth.getUser();
+    const { error } = await supabase.from('resolved_planning_alerts').upsert(
+      {
+        alert_id: alertId,
+        resolved_at: new Date().toISOString(),
+        resolved_by: userData.user?.id ?? null,
+      },
+      { onConflict: 'alert_id' }
+    );
+    if (error) throw error;
+  },
+
+  async markPlanningAlertsResolved(alertIds: string[]): Promise<void> {
+    if (alertIds.length === 0) return;
+    const supabase = createClient();
+    const { data: userData } = await supabase.auth.getUser();
+    const now = new Date().toISOString();
+    const rows = alertIds.map((alert_id) => ({
+      alert_id,
+      resolved_at: now,
+      resolved_by: userData.user?.id ?? null,
+    }));
+    const { error } = await supabase
+      .from('resolved_planning_alerts')
+      .upsert(rows, { onConflict: 'alert_id' });
+    if (error) throw error;
   },
 };

@@ -50,6 +50,7 @@ const defaultForm: Omit<Employee, 'id' | 'createdAt'> = {
   availability: POSITION_RULES.vente.defaultAvailability,
   contractType: 'fixed',
   contractHours: POSITION_RULES.vente.defaultContractHours,
+  annualVacationDays: 25,
   notes: '',
   isActive: true,
   inactiveMonths: [],
@@ -62,7 +63,11 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
   useEffect(() => {
     if (employee) {
       const { id, createdAt, ...rest } = employee;
-      setForm(rest);
+      setForm({
+        ...defaultForm,
+        ...rest,
+        annualVacationDays: rest.annualVacationDays ?? 25,
+      });
     } else {
       // Pour un nouvel employé, sélectionner automatiquement la première couleur non utilisée
       const firstAvailable = EMPLOYEE_COLORS.find((c) => !usedColors.includes(c)) ?? EMPLOYEE_COLORS[0];
@@ -83,6 +88,11 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
     const maxH = getMaxContractHours(form.contractType);
     if (form.contractHours < minH || form.contractHours > maxH) {
       newErrors.contractHours = `Entre ${minH} et ${maxH} h / semaine (Suisse)`;
+    }
+    if (form.contractType === 'fixed') {
+      if (form.annualVacationDays < 0 || form.annualVacationDays > 50) {
+        newErrors.annualVacationDays = 'Entre 0 et 50 jours par an';
+      }
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -278,6 +288,37 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
               )}
             </div>
           </div>
+
+          {form.contractType === 'fixed' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="annualVacationDays">Jours de vacances / an</Label>
+              <Input
+                id="annualVacationDays"
+                type="number"
+                min={0}
+                max={50}
+                value={form.annualVacationDays}
+                onChange={(e) =>
+                  setForm((p) => ({
+                    ...p,
+                    annualVacationDays: Math.min(
+                      50,
+                      Math.max(0, parseInt(e.target.value, 10) || 0)
+                    ),
+                  }))
+                }
+                className={errors.annualVacationDays ? 'border-red-300' : ''}
+              />
+              {errors.annualVacationDays ? (
+                <p className="text-xs text-red-500">{errors.annualVacationDays}</p>
+              ) : (
+                <p className="text-[11px] text-slate-400">
+                  L&apos;employé pourra poser autant de jours de vacances sur l&apos;année civile
+                  (jours habituels uniquement).
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Couleur */}
           <div className="space-y-2">

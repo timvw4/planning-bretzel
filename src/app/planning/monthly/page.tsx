@@ -54,6 +54,7 @@ import { ShiftPicker } from '@/components/planning/ShiftPicker';
 import { PlanningPublicationStatusBar } from '@/components/planning/PlanningPublicationStatusBar';
 import { PlanningEmployeeFilterDropdown } from '@/components/planning/PlanningEmployeeFilterDropdown';
 import { usePlanningEmployeeFilter } from '@/hooks/usePlanningEmployeeFilter';
+import { usePlanningDeepLink } from '@/hooks/usePlanningDeepLink';
 import { usePlanningStore } from '@/lib/store';
 import { useShallow } from 'zustand/react/shallow';
 import { getInitials, formatHours, formatDate, calcPickerPosition, getPlannedShiftTimeRange, calculateShiftDuration, availabilityMapKey, getPlannedEntryDurationHours } from '@/lib/utils';
@@ -155,6 +156,7 @@ export default function MonthlyPlanningPage() {
   );
 
   const { displayedEmployees } = usePlanningEmployeeFilter(activeEmployees);
+  const { isFocusedCell } = usePlanningDeepLink(activeEmployees);
 
   useEffect(() => {
     if (!dateParam) return;
@@ -734,6 +736,7 @@ export default function MonthlyPlanningPage() {
                       const isHolidayCell  = holidayMap.has(dateStr);
                       const isCurrentMonth = isSameMonth(day, currentMonth);
                       const isActive       = activeCell?.empId === employee.id && activeCell?.date === dateStr;
+                      const isFocused      = isFocusedCell(employee.id, dateStr);
                       const cellAlerts     = getCellAlerts(employee.id, dateStr);
                       const availDisp = availabilityStatusMeta(
                         availabilityStatusByKey[availabilityMapKey(employee.id, dateStr)]
@@ -742,6 +745,7 @@ export default function MonthlyPlanningPage() {
                       return (
                         <td
                           key={dateStr}
+                          data-planning-cell={`${employee.id}|${dateStr}`}
                           onClick={(e) => handleCellClick(employee.id, dateStr, e)}
                           className={`border-r border-slate-100 p-0.5 cursor-pointer select-none transition-colors ${
                             !isCurrentMonth && !shift
@@ -758,6 +762,8 @@ export default function MonthlyPlanningPage() {
                             className={`relative w-full h-full rounded-md flex flex-col items-center justify-center overflow-hidden transition-all duration-100 ${
                               isActive
                                 ? 'ring-2 ring-indigo-500 ring-inset'
+                                : isFocused
+                                ? 'ring-2 ring-amber-400 ring-inset animate-pulse'
                                 : !shift
                                 ? 'hover:bg-slate-200/60 group-hover/row:bg-slate-100/50'
                                 : 'hover:brightness-95'

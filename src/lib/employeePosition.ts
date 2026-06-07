@@ -1,5 +1,5 @@
 import type { AvailabilityDay, EmployeePosition } from '@/lib/types';
-import { getDay } from 'date-fns';
+import { getDay, parseISO } from 'date-fns';
 import { DAY_NAMES_FR } from '@/lib/utils';
 
 /** Jour de la semaine (date) → clé availability de la fiche employé. */
@@ -49,13 +49,39 @@ export function getStoredAvailabilityOnWorkDay(
   return storedStatus ?? null;
 }
 
-/** Cycle employé : normal → vacances → indisponible → normal. */
+/** Mode de marquage selon le type de contrat. */
+export type AvailabilityExceptionMode = 'vacation_only' | 'unavailable_only';
+
+/** Cycle employé selon le contrat : vacances seules (fixe) ou indispos seules (à l’heure, etc.). */
 export function getNextStoredAvailabilityStatus(
-  current: StoredAvailabilityStatus | null
+  current: StoredAvailabilityStatus | null,
+  options?: { mode?: AvailabilityExceptionMode; allowVacation?: boolean }
 ): StoredAvailabilityStatus | null {
-  if (current === null) return 'vacation';
-  if (current === 'vacation') return 'unavailable';
+  const mode: AvailabilityExceptionMode =
+    options?.mode ??
+    (options?.allowVacation === false ? 'unavailable_only' : 'vacation_only');
+
+  if (mode === 'vacation_only') {
+    if (current === null) return 'vacation';
+    return null;
+  }
+
+  if (current === null) return 'unavailable';
   return null;
+}
+
+/** Compte les jours vacances posés sur l’année civile (jours habituels uniquement). */
+export function countAnnualVacationDays(
+  rows: { date: string; status: string }[],
+  workDays: AvailabilityDay[],
+  year: number
+): number {
+  return rows.filter((row) => {
+    const status = normalizeStoredAvailabilityStatus(row.status);
+    if (status !== 'vacation') return false;
+    if (parseInt(row.date.slice(0, 4), 10) !== year) return false;
+    return isEmployeeWorkDay(parseISO(row.date), workDays);
+  }).length;
 }
 
 /** Libellé court des jours habituels pour l’employé (ex. « Lun, Mar, Mer »). */

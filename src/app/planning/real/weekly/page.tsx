@@ -126,6 +126,7 @@ export default function RealWeeklyPlanningPage() {
     const shift = shiftMap.get(entry.shiftId);
     const validated = getValidatedTimeRange(entry);
     const planned = getPlannedShiftTimeRange(shift);
+    const decl = getDeclarations(employeeId, dateStr);
     setEditTarget({
       employeeId,
       employeeName,
@@ -136,6 +137,9 @@ export default function RealWeeklyPlanningPage() {
       validatedEnd: validated.end,
       plannedStart: planned.start,
       plannedEnd: planned.end,
+      pause15min: decl?.pause_15min ?? true,
+      hadSnack: decl?.had_snack ?? false,
+      ateWorkFood: decl?.ate_work_food ?? false,
     });
     setEditOpen(true);
   };
@@ -438,9 +442,16 @@ export default function RealWeeklyPlanningPage() {
         target={editTarget}
         open={editOpen}
         onOpenChange={setEditOpen}
-        onSave={async (start, end) => {
+        onSave={async (start, end, options) => {
           if (!editTarget) return;
-          await updateValidatedTimes(editTarget.employeeId, editTarget.date, start, end);
+          await updateValidatedTimes(
+            editTarget.employeeId,
+            editTarget.date,
+            start,
+            end,
+            options
+          );
+          reloadDeclarations();
         }}
         onDelete={async () => {
           if (!editTarget) return;

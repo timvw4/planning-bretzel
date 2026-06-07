@@ -10,6 +10,7 @@ import { Employee, Shift, ScheduleEntry, AppSettings, PlanningAlert } from './ty
 import { defaultSettings } from '@/data/mock';
 import {
   buildPlanningAlerts,
+  applyResolvedPlanningAlerts,
   getAvailabilityFetchRange,
   getPlannedEntryDurationHours,
   getValidatedEntryDurationHours,
@@ -24,27 +25,34 @@ import { fetchGeofencePunchAlerts } from '@/lib/timePunches';
 
 function mergeAlertsPreservingResolved(
   prev: PlanningAlert[],
-  next: PlanningAlert[]
+  next: PlanningAlert[],
+  resolvedIds: string[]
 ): PlanningAlert[] {
-  const resolvedIds = new Set(prev.filter((a) => a.resolved).map((a) => a.id));
-  return next.map((a) => (resolvedIds.has(a.id) ? { ...a, resolved: true } : a));
+  const resolvedSet = new Set([
+    ...resolvedIds,
+    ...prev.filter((a) => a.resolved).map((a) => a.id),
+  ]);
+  return next.map((a) =>
+    resolvedSet.has(a.id) ? { ...a, resolved: true } : a
+  );
 }
 
 async function appendGeofenceAlerts(
   base: PlanningAlert[],
   employees: Employee[],
   settings: AppSettings,
-  prevAlerts: PlanningAlert[]
+  prevAlerts: PlanningAlert[],
+  resolvedIds: string[]
 ): Promise<PlanningAlert[]> {
   if (settings.notifications?.geofencePunch === false) {
-    return mergeAlertsPreservingResolved(prevAlerts, base);
+    return mergeAlertsPreservingResolved(prevAlerts, base, resolvedIds);
   }
   try {
     const geofence = await fetchGeofencePunchAlerts(createClient(), employees);
-    return mergeAlertsPreservingResolved(prevAlerts, [...base, ...geofence]);
+    return mergeAlertsPreservingResolved(prevAlerts, [...base, ...geofence], resolvedIds);
   } catch (err) {
     console.error('Alertes GPS :', err);
-    return mergeAlertsPreservingResolved(prevAlerts, base);
+    return mergeAlertsPreservingResolved(prevAlerts, base, resolvedIds);
   }
 }
 
@@ -55,6 +63,8 @@ interface PlanningStore {
   scheduleEntries: ScheduleEntry[];
   settings: AppSettings;
   alerts: PlanningAlert[];
+  /** IDs d'alertes marquées résolues (sync Supabase). */
+  resolvedAlertIds: string[];
   isLoading: boolean;
   /** Statut dispo employé par cellule : clé → `vacation` | `unavailable` (exceptions uniquement) */
   availabilityStatusByKey: Record<string, string>;
@@ -74,8 +84,8 @@ interface PlanningStore {
   mergeAvailabilityRequests: (dateFrom: string, dateTo: string) => Promise<void>;
 
   // ---- Actions Employés ----
-  addEmployee: (employee: Omit<Employee, 'id' | 'createdAt'>) => void;
-  updateEmployee: (id: string, updates: Partial<Employee>) => void;
+  addEmployee: (employee: Omit<Employee, 'id' | 'createdAt'>) => Promise<void>;
+  updateEmployee: (id: string, updates: Partial<Employee>) => Promise<void>;
   deleteEmployee: (id: string) => void;
   toggleMonthlyActive: (employeeId: string, monthKey: string) => void;
 
@@ -92,7 +102,8 @@ interface PlanningStore {
     employeeId: string,
     date: string,
     validatedStart: string,
-    validatedEnd: string
+    validatedEnd: string,
+    options?: { pause15min?: boolean; hadSnack?: boolean; ateWorkFood?: boolean }
   ) => Promise<void>;
   /** Retire une journée du planning réel et supprime le pointage associé. */
   removeValidatedDay: (employeeId: string, date: string) => Promise<void>;
@@ -110,6 +121,7 @@ interface PlanningStore {
   // ---- Alertes ----
   refreshAlerts: () => Promise<void>;
   resolveAlert: (alertId: string) => void;
+  resolveAlerts: (alertIds: string[]) => void;
 
   // ---- Getters calculés ----
   getEntryForCell: (employeeId: string, date: string) => ScheduleEntry | undefined;
@@ -131,6 +143,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
   scheduleEntries: [],
   settings: defaultSettings,
   alerts: [],
+  resolvedAlertIds: [],
   isLoading: true,
   currentDate: format(new Date(), 'yyyy-MM-dd'),
   availabilityStatusByKey: {},
@@ -145,11 +158,15 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     const silent = options?.silent ?? false;
     if (!silent) set({ isLoading: true });
     try {
-      const [employees, shifts, entries, settings] = await Promise.all([
+      const [employees, shifts, entries, settings, resolvedAlertIds] = await Promise.all([
         db.getEmployees(),
         db.getShifts(),
         db.getScheduleEntries(),
         db.getSettings(),
+        db.getResolvedPlanningAlertIds().catch((err) => {
+          console.error('Alertes résolues (lecture) :', err);
+          return [] as string[];
+        }),
       ]);
 
       const today = new Date();
@@ -185,11 +202,13 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       }
 
       const appSettings = settings ?? defaultSettings;
+      alerts = applyResolvedPlanningAlerts(alerts, resolvedAlertIds);
       alerts = await appendGeofenceAlerts(
         alerts,
         employees,
         appSettings,
-        get().alerts
+        get().alerts,
+        resolvedAlertIds
       );
 
       set({
@@ -198,6 +217,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         scheduleEntries: entries,
         settings: settings ?? defaultSettings,
         alerts,
+        resolvedAlertIds,
         availabilityStatusByKey,
         ...(silent ? {} : { isLoading: false }),
       });
@@ -224,25 +244,46 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
   },
 
   // ---- Employés ───────────────────────────────────────────
-  addEmployee: (employeeData) => {
+  addEmployee: async (employeeData) => {
     const newEmployee: Employee = {
       ...employeeData,
+      annualVacationDays: employeeData.annualVacationDays ?? 25,
       id: crypto.randomUUID(),
       createdAt: format(new Date(), 'yyyy-MM-dd'),
     };
     set((state) => ({ employees: [...state.employees, newEmployee] }));
-    db.upsertEmployee(newEmployee).catch(console.error);
+    try {
+      await db.upsertEmployee(newEmployee);
+    } catch (err) {
+      set((state) => ({
+        employees: state.employees.filter((e) => e.id !== newEmployee.id),
+      }));
+      throw err;
+    }
   },
 
-  updateEmployee: (id, updates) => {
-    set((state) => {
-      const updated = state.employees.map((e) =>
-        e.id === id ? { ...e, ...updates } : e
-      );
-      const employee = updated.find((e) => e.id === id);
-      if (employee) db.upsertEmployee(employee).catch(console.error);
-      return { employees: updated };
-    });
+  updateEmployee: async (id, updates) => {
+    const previous = get().employees.find((e) => e.id === id);
+    if (!previous) return;
+
+    const employee: Employee = {
+      ...previous,
+      ...updates,
+      annualVacationDays: updates.annualVacationDays ?? previous.annualVacationDays ?? 25,
+    };
+
+    set((state) => ({
+      employees: state.employees.map((e) => (e.id === id ? employee : e)),
+    }));
+
+    try {
+      await db.upsertEmployee(employee);
+    } catch (err) {
+      set((state) => ({
+        employees: state.employees.map((e) => (e.id === id ? previous : e)),
+      }));
+      throw err;
+    }
   },
 
   deleteEmployee: (id) => {
@@ -354,7 +395,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     void get().refreshAlerts();
   },
 
-  updateValidatedTimes: async (employeeId, date, validatedStart, validatedEnd) => {
+  updateValidatedTimes: async (employeeId, date, validatedStart, validatedEnd, options) => {
     const entry = get().scheduleEntries.find(
       (e) => e.employeeId === employeeId && e.date === date
     );
@@ -376,13 +417,19 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     try {
       await db.upsertEntry(updated);
       const supabase = createClient();
+      const punchUpdate: Record<string, unknown> = {
+        actual_start: validatedStart,
+        actual_end: validatedEnd,
+        reviewed_at: new Date().toISOString(),
+      };
+      if (options) {
+        if (options.pause15min !== undefined) punchUpdate.pause_15min = options.pause15min;
+        if (options.hadSnack !== undefined) punchUpdate.had_snack = options.hadSnack;
+        if (options.ateWorkFood !== undefined) punchUpdate.ate_work_food = options.ateWorkFood;
+      }
       await supabase
         .from('time_declarations')
-        .update({
-          actual_start: validatedStart,
-          actual_end: validatedEnd,
-          reviewed_at: new Date().toISOString(),
-        })
+        .update(punchUpdate)
         .eq('employee_id', employeeId)
         .eq('date', date)
         .eq('status', 'approved');
@@ -516,6 +563,13 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     const weekEnd = format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
     const { rangeFrom, rangeTo } = getAvailabilityFetchRange(scheduleEntries, today);
 
+    let resolvedAlertIds = get().resolvedAlertIds;
+    try {
+      resolvedAlertIds = await db.getResolvedPlanningAlertIds();
+    } catch (err) {
+      console.error('Alertes résolues (refresh) :', err);
+    }
+
     let alerts: PlanningAlert[] = [];
     let availabilityStatusByKey = get().availabilityStatusByKey;
     try {
@@ -543,22 +597,58 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       alerts = buildPlanningAlerts(employees, shifts, scheduleEntries, weekStart, weekEnd, [], []);
     }
 
+    alerts = applyResolvedPlanningAlerts(alerts, resolvedAlertIds);
     alerts = await appendGeofenceAlerts(
       alerts,
       employees,
       settings ?? defaultSettings,
-      get().alerts
+      get().alerts,
+      resolvedAlertIds
     );
 
-    set({ alerts, availabilityStatusByKey });
+    set({ alerts, resolvedAlertIds, availabilityStatusByKey });
   },
 
   resolveAlert: (alertId) => {
     set((state) => ({
+      resolvedAlertIds: state.resolvedAlertIds.includes(alertId)
+        ? state.resolvedAlertIds
+        : [...state.resolvedAlertIds, alertId],
       alerts: state.alerts.map((a) =>
         a.id === alertId ? { ...a, resolved: true } : a
       ),
     }));
+    void db.markPlanningAlertResolved(alertId).catch((err) => {
+      console.error('resolveAlert :', err);
+      toast.error('Impossible d’enregistrer l’alerte comme résolue');
+      set((state) => ({
+        resolvedAlertIds: state.resolvedAlertIds.filter((id) => id !== alertId),
+        alerts: state.alerts.map((a) =>
+          a.id === alertId ? { ...a, resolved: false } : a
+        ),
+      }));
+    });
+  },
+
+  resolveAlerts: (alertIds) => {
+    if (alertIds.length === 0) return;
+    const idSet = new Set(alertIds);
+    set((state) => ({
+      resolvedAlertIds: [...new Set([...state.resolvedAlertIds, ...alertIds])],
+      alerts: state.alerts.map((a) =>
+        idSet.has(a.id) ? { ...a, resolved: true } : a
+      ),
+    }));
+    void db.markPlanningAlertsResolved(alertIds).catch((err) => {
+      console.error('resolveAlerts :', err);
+      toast.error('Impossible d’enregistrer les alertes comme résolues');
+      set((state) => ({
+        resolvedAlertIds: state.resolvedAlertIds.filter((id) => !idSet.has(id)),
+        alerts: state.alerts.map((a) =>
+          idSet.has(a.id) ? { ...a, resolved: false } : a
+        ),
+      }));
+    });
   },
 
   // ---- Getters ────────────────────────────────────────────

@@ -24,13 +24,22 @@ export interface ValidatedTimeEditTarget {
   validatedEnd: string;
   plannedStart?: string;
   plannedEnd?: string;
+  pause15min: boolean;
+  hadSnack: boolean;
+  ateWorkFood: boolean;
+}
+
+export interface ValidatedTimeEditOptions {
+  pause15min: boolean;
+  hadSnack: boolean;
+  ateWorkFood: boolean;
 }
 
 interface ValidatedTimeEditDialogProps {
   target: ValidatedTimeEditTarget | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSave: (start: string, end: string) => Promise<void>;
+  onSave: (start: string, end: string, options: ValidatedTimeEditOptions) => Promise<void>;
   onDelete?: () => Promise<void>;
 }
 
@@ -44,6 +53,9 @@ export function ValidatedTimeEditDialog({
 }: ValidatedTimeEditDialogProps) {
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
+  const [pause15min, setPause15min] = useState(true);
+  const [hadSnack, setHadSnack] = useState(false);
+  const [ateWorkFood, setAteWorkFood] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -52,6 +64,9 @@ export function ValidatedTimeEditDialog({
     if (!target || !open) return;
     setStart(target.validatedStart);
     setEnd(target.validatedEnd);
+    setPause15min(target.pause15min);
+    setHadSnack(target.hadSnack);
+    setAteWorkFood(target.ateWorkFood);
     setDeleteConfirmOpen(false);
   }, [target, open]);
 
@@ -67,7 +82,7 @@ export function ValidatedTimeEditDialog({
     if (calculateShiftDuration(start, end) <= 0) return;
     setSubmitting(true);
     try {
-      await onSave(start, end);
+      await onSave(start, end, { pause15min, hadSnack, ateWorkFood });
       onOpenChange(false);
     } finally {
       setSubmitting(false);
@@ -139,6 +154,39 @@ export function ValidatedTimeEditDialog({
                 <span className="font-semibold text-slate-700">{formatHours(duration)}</span>
               </p>
             )}
+
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-2">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                Pause &amp; repas
+              </p>
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={pause15min}
+                  onChange={(e) => setPause15min(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+                />
+                <span className="text-sm text-slate-700">Pause 15 min</span>
+              </label>
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={hadSnack}
+                  onChange={(e) => setHadSnack(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+                />
+                <span className="text-sm text-slate-700">Collation</span>
+              </label>
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={ateWorkFood}
+                  onChange={(e) => setAteWorkFood(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+                />
+                <span className="text-sm text-slate-700">Repas travail</span>
+              </label>
+            </div>
           </div>
 
           <div className="flex flex-col-reverse gap-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
