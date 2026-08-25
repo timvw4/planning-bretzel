@@ -37,7 +37,7 @@ const EXCEPTION_CONFIG: Record<StoredAvailabilityStatus, {
   unavailable: { label: 'Indisponible', bg: '#FEE2E2', text: '#DC2626', border: '#FCA5A5' },
 };
 
-// Cycle : fixe = normal ↔ vacances ; à l’heure = normal ↔ indispo
+// Cycle : fixe = normal → vacances → indispo → normal ; à l’heure = normal ↔ indispo
 const WEEK_DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 
 // ── Squelette de chargement initial ─────────────────────────
@@ -109,9 +109,20 @@ export default function EmployeeAvailabilityPage() {
   const monthKey = format(currentDate, 'yyyy-MM');
   const calendarYear = currentDate.getFullYear();
   const isFixedContract = contractType === 'fixed';
+  const vacationQuotaReached = isFixedContract && yearVacationCount >= annualVacationDays;
+  // Salarié fixe : vacances + indispos. Quota épuisé → on saute l'étape vacances.
   const availabilityOptions = {
-    mode: (isFixedContract ? 'vacation_only' : 'unavailable_only') as AvailabilityExceptionMode,
+    mode: (isFixedContract
+      ? vacationQuotaReached
+        ? 'unavailable_only'
+        : 'vacation_and_unavailable'
+      : 'unavailable_only') as AvailabilityExceptionMode,
   };
+  // Étapes affichées dans la légende du cycle, dans l'ordre des clics.
+  const cycleSteps: StoredAvailabilityStatus[] =
+    availabilityOptions.mode === 'vacation_and_unavailable'
+      ? ['vacation', 'unavailable']
+      : ['unavailable'];
 
   useEffect(() => {
     const supabase = createClient();
@@ -206,11 +217,12 @@ export default function EmployeeAvailabilityPage() {
 
     const next = getNextStoredAvailabilityStatus(current, availabilityOptions);
 
-    if (next === 'vacation' && isFixedContract && yearVacationCount >= annualVacationDays) {
-      toast.error(
-        `Quota atteint : vous avez déjà posé ${annualVacationDays} jour${annualVacationDays > 1 ? 's' : ''} de vacances en ${calendarYear}.`
+    // Quota épuisé : on n'interdit plus le clic, on bascule directement en indisponibilité.
+    if (current === null && next === 'unavailable' && vacationQuotaReached) {
+      toast(
+        `Quota de vacances atteint (${annualVacationDays} j en ${calendarYear}) — ce jour est marqué comme indisponible.`,
+        { icon: 'ℹ️' }
       );
-      return;
     }
 
     const snapshot = new Map(availabilities);
@@ -374,8 +386,12 @@ export default function EmployeeAvailabilityPage() {
       )}
 
       {/* ── Résumé exceptions ─────────────────────────────────── */}
-      <div className="grid gap-3 animate-stagger-2 grid-cols-1 max-w-xs mx-auto w-full">
-        {isFixedContract ? (
+      <div
+        className={`grid gap-3 animate-stagger-2 w-full mx-auto ${
+          isFixedContract ? 'grid-cols-2 max-w-sm' : 'grid-cols-1 max-w-xs'
+        }`}
+      >
+        {isFixedContract && (
           <div
             className="rounded-2xl border p-3 text-center transition-all duration-300"
             style={{
@@ -393,34 +409,36 @@ export default function EmployeeAvailabilityPage() {
               {countExceptions('vacation')} ce mois-ci
             </p>
           </div>
-        ) : (
-          <div
-            className="rounded-2xl border p-3 text-center transition-all duration-300"
-            style={{
-              backgroundColor: EXCEPTION_CONFIG.unavailable.bg + '55',
-              borderColor: EXCEPTION_CONFIG.unavailable.border,
-            }}
-          >
-            <p className="text-2xl font-bold tabular-nums" style={{ color: EXCEPTION_CONFIG.unavailable.text }}>
-              {countExceptions('unavailable')}
-            </p>
-            <p className="text-[11px] font-semibold mt-0.5" style={{ color: EXCEPTION_CONFIG.unavailable.text }}>
-              Indisponible{countExceptions('unavailable') > 1 ? 's' : ''} ce mois
-            </p>
-          </div>
         )}
+
+        <div
+          className="rounded-2xl border p-3 text-center transition-all duration-300"
+          style={{
+            backgroundColor: EXCEPTION_CONFIG.unavailable.bg + '55',
+            borderColor: EXCEPTION_CONFIG.unavailable.border,
+          }}
+        >
+          <p className="text-2xl font-bold tabular-nums" style={{ color: EXCEPTION_CONFIG.unavailable.text }}>
+            {countExceptions('unavailable')}
+          </p>
+          <p className="text-[11px] font-semibold mt-0.5" style={{ color: EXCEPTION_CONFIG.unavailable.text }}>
+            Indisponible{countExceptions('unavailable') > 1 ? 's' : ''} ce mois
+          </p>
+          {isFixedContract && (
+            <p className="text-[10px] mt-1 opacity-80" style={{ color: EXCEPTION_CONFIG.unavailable.text }}>
+              Sans limite
+            </p>
+          )}
+        </div>
       </div>
 
-      {!isFixedContract && (
-        <p className="text-[11px] text-slate-400 text-center -mt-1 animate-stagger-2">
-          En tant qu&apos;employé à l&apos;heure, vous pouvez uniquement signaler vos indisponibilités.
-        </p>
-      )}
-      {isFixedContract && (
-        <p className="text-[11px] text-slate-400 text-center -mt-1 animate-stagger-2">
-          En tant que salarié fixe, vous pouvez uniquement poser vos jours de vacances (quota annuel).
-        </p>
-      )}
+      <p className="text-[11px] text-slate-400 text-center -mt-1 animate-stagger-2">
+        {isFixedContract
+          ? vacationQuotaReached
+            ? `Quota de vacances atteint pour ${calendarYear} — vous pouvez encore signaler vos indisponibilités.`
+            : 'Salarié fixe : posez vos vacances (dans la limite du quota) et signalez vos indisponibilités.'
+          : "En tant qu'employé à l'heure, vous pouvez signaler vos indisponibilités sans limite."}
+      </p>
 
       {/* ── Calendrier ───────────────────────────────────────── */}
       <div
@@ -461,49 +479,32 @@ export default function EmployeeAvailabilityPage() {
             <span className="text-[10px] text-slate-400 font-medium">Cliquez vos jours habituels :</span>
             <span className="text-[10px] text-slate-500 font-medium">Normal</span>
             <span className="text-[10px] text-slate-300">→</span>
-            {isFixedContract ? (
-              <>
+            {cycleSteps.map((step) => (
+              <span key={step} className="flex items-center gap-1.5">
                 <span className="flex items-center gap-1">
                   <span
                     className="w-4 h-4 rounded-md flex items-center justify-center"
                     style={{
-                      backgroundColor: EXCEPTION_CONFIG.vacation.bg,
-                      color: EXCEPTION_CONFIG.vacation.text,
+                      backgroundColor: EXCEPTION_CONFIG[step].bg,
+                      color: EXCEPTION_CONFIG[step].text,
                     }}
                   >
-                    <AvailabilityStatusIcon status="vacation" size={10} strokeWidth={2.5} />
+                    <AvailabilityStatusIcon
+                      status={step}
+                      size={10}
+                      strokeWidth={step === 'unavailable' ? 3 : 2.5}
+                    />
                   </span>
                   <span
                     className="text-[10px] font-medium hidden sm:inline"
-                    style={{ color: EXCEPTION_CONFIG.vacation.text }}
+                    style={{ color: EXCEPTION_CONFIG[step].text }}
                   >
-                    Vacances
+                    {step === 'vacation' ? 'Vacances' : 'Indispo'}
                   </span>
                 </span>
                 <span className="text-[10px] text-slate-300">→</span>
-              </>
-            ) : (
-              <>
-                <span className="flex items-center gap-1">
-                  <span
-                    className="w-4 h-4 rounded-md flex items-center justify-center"
-                    style={{
-                      backgroundColor: EXCEPTION_CONFIG.unavailable.bg,
-                      color: EXCEPTION_CONFIG.unavailable.text,
-                    }}
-                  >
-                    <AvailabilityStatusIcon status="unavailable" size={10} strokeWidth={3} />
-                  </span>
-                  <span
-                    className="text-[10px] font-medium hidden sm:inline"
-                    style={{ color: EXCEPTION_CONFIG.unavailable.text }}
-                  >
-                    Indispo
-                  </span>
-                </span>
-                <span className="text-[10px] text-slate-300">→</span>
-              </>
-            )}
+              </span>
+            ))}
             <span className="text-[10px] text-slate-500 font-medium">Normal</span>
           </div>
         )}
@@ -642,7 +643,7 @@ export default function EmployeeAvailabilityPage() {
           ? 'Ce mois est verrouillé. Demandez une modification à votre responsable.'
           : workDays.length > 0
           ? isFixedContract
-            ? 'Posez vos vacances sur vos jours habituels (quota annuel), puis validez avant le début du mois.'
+            ? 'Posez vos vacances (quota annuel) et vos indisponibilités sur vos jours habituels, puis validez avant le début du mois.'
             : 'Signalez vos indisponibilités sur vos jours habituels, puis validez avant le début du mois.'
           : 'En attente de configuration de vos jours habituels par votre responsable.'}
       </p>
@@ -660,7 +661,7 @@ export default function EmployeeAvailabilityPage() {
               <strong className="text-slate-700">{format(currentDate, 'MMMM yyyy', { locale: fr })}</strong>{' '}
               seront verrouillées ({workDaysSummary || 'jours habituels'}).
               {isFixedContract
-                ? ' Seuls vos jours de vacances sont enregistrés.'
+                ? ' Vos jours de vacances et vos indisponibilités sont enregistrés.'
                 : ' Seules vos indisponibilités sont enregistrées.'}
               Pour les modifier ensuite, il faudra en faire la demande.
             </p>

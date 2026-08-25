@@ -5,11 +5,43 @@
 
 import { createClient } from './client';
 import { supabaseErrorMessage } from './errorMessage';
-import { Employee, Shift, ScheduleEntry, AppSettings, WorkSiteGeofence, EmployeePosition } from '@/lib/types';
+import {
+  Employee,
+  Shift,
+  ScheduleEntry,
+  AppSettings,
+  WorkSiteGeofence,
+  EmployeePosition,
+  NotificationSettings,
+} from '@/lib/types';
 import { getPositionLabel, inferPositionFromLegacyRole, parseEmployeePosition, normalizeStoredAvailabilityStatus } from '@/lib/employeePosition';
 import { normalizeContractType } from '@/lib/utils';
 import { SWISS_DEFAULT_FULL_TIME_HOURS, SWISS_DEFAULT_MAX_WEEKLY_HOURS, SWISS_MIN_REST_HOURS } from '@/lib/swissLabor';
 import { format, parse, startOfMonth, endOfMonth } from 'date-fns';
+
+// ── Lecture paginée ──────────────────────────────────────────
+// Supabase (PostgREST) plafonne chaque requête à un nombre fixe de lignes
+// (1000 par défaut). Sans pagination, les lignes au-delà de ce plafond sont
+// ignorées SANS erreur : le planning perdrait des journées en silence dès
+// que l'historique dépasse la limite. On lit donc page par page.
+
+const PAGE_SIZE = 1000;
+
+type PagedResponse<T> = { data: T[] | null; error: unknown };
+
+async function fetchAllPages<T>(
+  buildQuery: (rangeFrom: number, rangeTo: number) => PromiseLike<PagedResponse<T>>
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let page = 0; ; page += 1) {
+    const rangeFrom = page * PAGE_SIZE;
+    const { data, error } = await buildQuery(rangeFrom, rangeFrom + PAGE_SIZE - 1);
+    if (error) throw error;
+    const batch = data ?? [];
+    rows.push(...batch);
+    if (batch.length < PAGE_SIZE) return rows;
+  }
+}
 
 // ── Conversions Supabase (snake_case) ↔ App (camelCase) ──────
 
@@ -90,6 +122,20 @@ function shiftToDb(s: Shift) {
   };
 }
 
+/** Ligne brute de schedule_entries telle que sélectionnée ci-dessous. */
+interface ScheduleEntryRow {
+  id: string;
+  employee_id: string;
+  shift_id: string;
+  date: string;
+  note: string | null;
+  is_modified: boolean | null;
+  visible_to_employee: boolean | null;
+  validated_start: string | null;
+  validated_end: string | null;
+  validated_break_minutes: number | null;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function dbToEntry(row: any): ScheduleEntry {
   return {
@@ -105,6 +151,7 @@ function dbToEntry(row: any): ScheduleEntry {
     visibleToEmployee: row.visible_to_employee ?? true,
     validatedStart: row.validated_start ?? null,
     validatedEnd: row.validated_end ?? null,
+    validatedBreakMinutes: row.validated_break_minutes ?? null,
   };
 }
 
@@ -124,21 +171,26 @@ function dbToSettings(row: any): AppSettings {
     return { lat, lng, radiusM };
   })();
 
+  const storedNotifications = (row.notifications ?? {}) as Partial<NotificationSettings>;
+
   return {
     companyName: row.company_name ?? 'Mon Entreprise',
     weekStartDay: row.week_start_day ?? 1,
     minRestHours: row.min_rest_hours ?? SWISS_MIN_REST_HOURS,
     maxWeeklyHours: row.max_weekly_hours ?? SWISS_DEFAULT_MAX_WEEKLY_HOURS,
-    locale: row.locale ?? 'fr-FR',
-    timezone: row.timezone ?? 'Europe/Paris',
+    locale: row.locale ?? 'fr-CH',
+    timezone: row.timezone ?? 'Europe/Zurich',
     theme: 'light',
     holidays: row.holidays ?? [],
     planningMonthMode: row.planning_month_mode ?? 'strict',
-    notifications: row.notifications ?? {
-      overtime: true,
-      unavailable: true,
-      lowRest: true,
-      geofencePunch: true,
+    deductBreaks: row.deduct_breaks ?? false,
+    notifications: {
+      overtime: storedNotifications.overtime ?? true,
+      unavailable: storedNotifications.unavailable ?? true,
+      lowRest: storedNotifications.lowRest ?? true,
+      geofencePunch: storedNotifications.geofencePunch ?? true,
+      missingPunch: storedNotifications.missingPunch ?? true,
+      shortBreak: storedNotifications.shortBreak ?? true,
     },
     workSite,
   };
@@ -205,13 +257,24 @@ export const db = {
   },
 
   // ── Planning ───────────────────────────────────────────────
+  /**
+   * Toutes les entrées du planning, lues page par page.
+   * L'ordre (date, employé) est unique en base, ce qui garantit qu'aucune
+   * ligne n'est lue deux fois ni oubliée entre deux pages.
+   */
   async getScheduleEntries(): Promise<ScheduleEntry[]> {
     const supabase = createClient();
-    const { data, error } = await supabase.from('schedule_entries').select(
-      'id, employee_id, shift_id, date, note, is_modified, visible_to_employee, validated_start, validated_end'
+    const rows = await fetchAllPages<ScheduleEntryRow>((rangeFrom, rangeTo) =>
+      supabase
+        .from('schedule_entries')
+        .select(
+          'id, employee_id, shift_id, date, note, is_modified, visible_to_employee, validated_start, validated_end, validated_break_minutes'
+        )
+        .order('date', { ascending: true })
+        .order('employee_id', { ascending: true })
+        .range(rangeFrom, rangeTo)
     );
-    if (error) throw error;
-    return (data ?? []).map(dbToEntry);
+    return rows.map(dbToEntry);
   },
 
   async upsertEntry(entry: ScheduleEntry): Promise<void> {
@@ -229,6 +292,7 @@ export const db = {
           visible_to_employee: entry.visibleToEmployee,
           validated_start: entry.validatedStart ?? null,
           validated_end: entry.validatedEnd ?? null,
+          validated_break_minutes: entry.validatedBreakMinutes ?? null,
         },
         { onConflict: 'employee_id,date' }
       );
@@ -269,6 +333,7 @@ export const db = {
           visible_to_employee: e.visibleToEmployee,
           validated_start: e.validatedStart ?? null,
           validated_end: e.validatedEnd ?? null,
+          validated_break_minutes: e.validatedBreakMinutes ?? null,
         })),
         { onConflict: 'employee_id,date' }
       );
@@ -307,6 +372,8 @@ export const db = {
       unavailable: Boolean(settings.notifications?.unavailable ?? true),
       lowRest: Boolean(settings.notifications?.lowRest ?? true),
       geofencePunch: Boolean(settings.notifications?.geofencePunch ?? true),
+      missingPunch: Boolean(settings.notifications?.missingPunch ?? true),
+      shortBreak: Boolean(settings.notifications?.shortBreak ?? true),
     };
     const { error } = await supabase
       .from('app_settings')
@@ -318,6 +385,7 @@ export const db = {
         locale: settings.locale,
         timezone: settings.timezone,
         planning_month_mode: settings.planningMonthMode,
+        deduct_breaks: Boolean(settings.deductBreaks),
         holidays,
         notifications,
         work_site_latitude: settings.workSite?.lat ?? null,
@@ -362,13 +430,21 @@ export const db = {
     dateTo: string
   ): Promise<{ employeeId: string; date: string; status: string }[]> {
     const supabase = createClient();
-    const { data, error } = await supabase
-      .from('availability_requests')
-      .select('employee_id, date, status')
-      .gte('date', dateFrom)
-      .lte('date', dateTo);
-    if (error) throw error;
-    return (data ?? []).map((r) => ({
+    const data = await fetchAllPages<{
+      employee_id: string;
+      date: string;
+      status: string | null;
+    }>((rangeFrom, rangeTo) =>
+      supabase
+        .from('availability_requests')
+        .select('employee_id, date, status')
+        .gte('date', dateFrom)
+        .lte('date', dateTo)
+        .order('date', { ascending: true })
+        .order('employee_id', { ascending: true })
+        .range(rangeFrom, rangeTo)
+    );
+    return data.map((r) => ({
       employeeId: r.employee_id as string,
       date:
         typeof r.date === 'string' && (r.date as string).length === 10
@@ -380,24 +456,32 @@ export const db = {
 
   async getAvailabilityValidations(): Promise<{ employeeId: string; monthKey: string }[]> {
     const supabase = createClient();
-    const { data, error } = await supabase
-      .from('availability_validations')
-      .select('employee_id, month_key');
-    if (error) throw error;
-    return (data ?? []).map((r) => ({
-      employeeId: r.employee_id as string,
-      monthKey: r.month_key as string,
+    const data = await fetchAllPages<{ employee_id: string; month_key: string }>(
+      (rangeFrom, rangeTo) =>
+        supabase
+          .from('availability_validations')
+          .select('employee_id, month_key')
+          .order('month_key', { ascending: true })
+          .order('employee_id', { ascending: true })
+          .range(rangeFrom, rangeTo)
+    );
+    return data.map((r) => ({
+      employeeId: r.employee_id,
+      monthKey: r.month_key,
     }));
   },
 
   /** IDs d'alertes marquées résolues (persistées Supabase). */
   async getResolvedPlanningAlertIds(): Promise<string[]> {
     const supabase = createClient();
-    const { data, error } = await supabase
-      .from('resolved_planning_alerts')
-      .select('alert_id');
-    if (error) throw error;
-    return (data ?? []).map((r) => r.alert_id as string);
+    const data = await fetchAllPages<{ alert_id: string }>((rangeFrom, rangeTo) =>
+      supabase
+        .from('resolved_planning_alerts')
+        .select('alert_id')
+        .order('alert_id', { ascending: true })
+        .range(rangeFrom, rangeTo)
+    );
+    return data.map((r) => r.alert_id);
   },
 
   async markPlanningAlertResolved(alertId: string): Promise<void> {

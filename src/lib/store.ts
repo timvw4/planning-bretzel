@@ -11,6 +11,8 @@ import { defaultSettings } from '@/data/mock';
 import {
   buildPlanningAlerts,
   applyResolvedPlanningAlerts,
+  filterAlertsByNotifications,
+  getAlertWindow,
   getAvailabilityFetchRange,
   getPlannedEntryDurationHours,
   getValidatedEntryDurationHours,
@@ -20,8 +22,8 @@ import {
 import { db } from '@/lib/supabase/db';
 import { createClient } from '@/lib/supabase/client';
 import { supabaseErrorMessage } from '@/lib/supabase/errorMessage';
-import { format, startOfWeek, endOfWeek } from 'date-fns';
-import { fetchGeofencePunchAlerts } from '@/lib/timePunches';
+import { format } from 'date-fns';
+import { fetchGeofencePunchAlerts, fetchMissingPunchAlerts } from '@/lib/timePunches';
 
 function mergeAlertsPreservingResolved(
   prev: PlanningAlert[],
@@ -37,23 +39,52 @@ function mergeAlertsPreservingResolved(
   );
 }
 
-async function appendGeofenceAlerts(
+/**
+ * Alertes qui demandent une lecture des pointages : hors périmètre GPS et
+ * journées planifiées sans pointage. Une erreur réseau sur ces deux
+ * requêtes ne doit pas faire disparaître les autres alertes.
+ */
+async function appendPunchAlerts(
   base: PlanningAlert[],
   employees: Employee[],
+  shifts: Shift[],
+  scheduleEntries: ScheduleEntry[],
   settings: AppSettings,
   prevAlerts: PlanningAlert[],
   resolvedIds: string[]
 ): Promise<PlanningAlert[]> {
-  if (settings.notifications?.geofencePunch === false) {
-    return mergeAlertsPreservingResolved(prevAlerts, base, resolvedIds);
+  const supabase = createClient();
+  const extra: PlanningAlert[] = [];
+
+  if (settings.notifications?.geofencePunch !== false) {
+    try {
+      extra.push(...(await fetchGeofencePunchAlerts(supabase, employees)));
+    } catch (err) {
+      console.error('Alertes GPS :', err);
+    }
   }
-  try {
-    const geofence = await fetchGeofencePunchAlerts(createClient(), employees);
-    return mergeAlertsPreservingResolved(prevAlerts, [...base, ...geofence], resolvedIds);
-  } catch (err) {
-    console.error('Alertes GPS :', err);
-    return mergeAlertsPreservingResolved(prevAlerts, base, resolvedIds);
+
+  if (settings.notifications?.missingPunch !== false) {
+    try {
+      const workShiftIds = new Set(
+        shifts.filter((s) => s.type === 'work').map((s) => s.id)
+      );
+      const plannedWorkDays = scheduleEntries
+        .filter((e) => workShiftIds.has(e.shiftId))
+        .map((e) => ({
+          employeeId: e.employeeId,
+          date: e.date,
+          validated: Boolean(e.validatedStart && e.validatedEnd),
+        }));
+      extra.push(
+        ...(await fetchMissingPunchAlerts(supabase, employees, plannedWorkDays))
+      );
+    } catch (err) {
+      console.error('Alertes journées non pointées :', err);
+    }
   }
+
+  return mergeAlertsPreservingResolved(prevAlerts, [...base, ...extra], resolvedIds);
 }
 
 interface PlanningStore {
@@ -103,9 +134,13 @@ interface PlanningStore {
     date: string,
     validatedStart: string,
     validatedEnd: string,
-    options?: { pause15min?: boolean; hadSnack?: boolean; ateWorkFood?: boolean }
+    options?: {
+      pauseMinutes?: number;
+      hadSnack?: boolean;
+      ateWorkFood?: boolean;
+    }
   ) => Promise<void>;
-  /** Retire une journée du planning réel et supprime le pointage associé. */
+  /** Retire une journée du planning réel et archive le pointage associé. */
   removeValidatedDay: (employeeId: string, date: string) => Promise<void>;
   copyWeek: (sourceWeekStart: string, targetWeekStart: string) => void;
   setCurrentDate: (date: string) => void;
@@ -170,8 +205,8 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       ]);
 
       const today = new Date();
-      const weekStart = format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
-      const weekEnd = format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+      const appSettings = settings ?? defaultSettings;
+      const alertWindow = getAlertWindow(today);
       const { rangeFrom, rangeTo } = getAvailabilityFetchRange(entries, today);
 
       let alerts: PlanningAlert[] = [];
@@ -185,8 +220,8 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
           employees,
           shifts,
           entries,
-          weekStart,
-          weekEnd,
+          alertWindow,
+          appSettings,
           requests,
           validations
         );
@@ -198,18 +233,28 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         );
       } catch (err) {
         console.error('loadData : disponibilités / validations (alertes partielles)', err);
-        alerts = buildPlanningAlerts(employees, shifts, entries, weekStart, weekEnd, [], []);
+        alerts = buildPlanningAlerts(
+          employees,
+          shifts,
+          entries,
+          alertWindow,
+          appSettings,
+          [],
+          []
+        );
       }
 
-      const appSettings = settings ?? defaultSettings;
       alerts = applyResolvedPlanningAlerts(alerts, resolvedAlertIds);
-      alerts = await appendGeofenceAlerts(
+      alerts = await appendPunchAlerts(
         alerts,
         employees,
+        shifts,
+        entries,
         appSettings,
         get().alerts,
         resolvedAlertIds
       );
+      alerts = filterAlertsByNotifications(alerts, appSettings.notifications);
 
       set({
         employees,
@@ -407,6 +452,10 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       ...entry,
       validatedStart,
       validatedEnd,
+      validatedBreakMinutes:
+        options?.pauseMinutes !== undefined
+          ? options.pauseMinutes
+          : entry.validatedBreakMinutes ?? null,
       isModified: true,
     };
     set((state) => ({
@@ -423,7 +472,11 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         reviewed_at: new Date().toISOString(),
       };
       if (options) {
-        if (options.pause15min !== undefined) punchUpdate.pause_15min = options.pause15min;
+        if (options.pauseMinutes !== undefined) {
+          punchUpdate.pause_minutes = options.pauseMinutes;
+          // L'ancienne case reste alignée pour les écrans qui l'affichent encore.
+          punchUpdate.pause_15min = options.pauseMinutes >= 15;
+        }
         if (options.hadSnack !== undefined) punchUpdate.had_snack = options.hadSnack;
         if (options.ateWorkFood !== undefined) punchUpdate.ate_work_food = options.ateWorkFood;
       }
@@ -432,7 +485,8 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         .update(punchUpdate)
         .eq('employee_id', employeeId)
         .eq('date', date)
-        .eq('status', 'approved');
+        .eq('status', 'approved')
+        .is('deleted_at', null);
       toast.success('Heures réelles mises à jour');
     } catch (err) {
       console.error(err);
@@ -453,6 +507,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       ...entry,
       validatedStart: null,
       validatedEnd: null,
+      validatedBreakMinutes: null,
       isModified: false,
     };
     set((state) => ({
@@ -463,16 +518,23 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
     try {
       await db.upsertEntry(updated);
       const supabase = createClient();
+      // Archivage : le pointage disparaît des écrans mais reste en base,
+      // parce qu'un pointage est une pièce justificative.
+      const { data: userData } = await supabase.auth.getUser();
       const { error } = await supabase
         .from('time_declarations')
-        .delete()
+        .update({
+          deleted_at: new Date().toISOString(),
+          deleted_by: userData.user?.id ?? null,
+        })
         .eq('employee_id', employeeId)
-        .eq('date', date);
+        .eq('date', date)
+        .is('deleted_at', null);
       if (error) throw error;
-      toast.success('Journée retirée du planning réel');
+      toast.success('Journée retirée du planning réel — pointage archivé');
     } catch (err) {
       console.error(err);
-      toast.error('Impossible de supprimer cette journée');
+      toast.error('Impossible de retirer cette journée');
       void get().loadData({ silent: true });
     }
   },
@@ -559,8 +621,8 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
   refreshAlerts: async () => {
     const { employees, shifts, scheduleEntries, settings } = get();
     const today = new Date();
-    const weekStart = format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
-    const weekEnd = format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+    const appSettings = settings ?? defaultSettings;
+    const alertWindow = getAlertWindow(today);
     const { rangeFrom, rangeTo } = getAvailabilityFetchRange(scheduleEntries, today);
 
     let resolvedAlertIds = get().resolvedAlertIds;
@@ -581,8 +643,8 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
         employees,
         shifts,
         scheduleEntries,
-        weekStart,
-        weekEnd,
+        alertWindow,
+        appSettings,
         requests,
         validations
       );
@@ -594,17 +656,28 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
       );
     } catch (err) {
       console.error('refreshAlerts : lecture disponibilités / validations', err);
-      alerts = buildPlanningAlerts(employees, shifts, scheduleEntries, weekStart, weekEnd, [], []);
+      alerts = buildPlanningAlerts(
+        employees,
+        shifts,
+        scheduleEntries,
+        alertWindow,
+        appSettings,
+        [],
+        []
+      );
     }
 
     alerts = applyResolvedPlanningAlerts(alerts, resolvedAlertIds);
-    alerts = await appendGeofenceAlerts(
+    alerts = await appendPunchAlerts(
       alerts,
       employees,
-      settings ?? defaultSettings,
+      shifts,
+      scheduleEntries,
+      appSettings,
       get().alerts,
       resolvedAlertIds
     );
+    alerts = filterAlertsByNotifications(alerts, appSettings.notifications);
 
     set({ alerts, resolvedAlertIds, availabilityStatusByKey });
   },
@@ -707,7 +780,8 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
   },
 
   getValidatedWeeklyHours: (employeeId, weekStart, weekEnd) => {
-    const { scheduleEntries } = get();
+    const { scheduleEntries, settings } = get();
+    const options = { deductBreaks: settings.deductBreaks === true };
     return scheduleEntries
       .filter(
         (e) =>
@@ -715,11 +789,12 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
           e.date >= weekStart &&
           e.date <= weekEnd
       )
-      .reduce((total, entry) => total + getValidatedEntryDurationHours(entry), 0);
+      .reduce((total, entry) => total + getValidatedEntryDurationHours(entry, options), 0);
   },
 
   getValidatedMonthlyHours: (employeeId, monthStart, monthEnd) => {
-    const { scheduleEntries } = get();
+    const { scheduleEntries, settings } = get();
+    const options = { deductBreaks: settings.deductBreaks === true };
     return scheduleEntries
       .filter(
         (e) =>
@@ -727,7 +802,7 @@ export const usePlanningStore = create<PlanningStore>((set, get) => ({
           e.date >= monthStart &&
           e.date <= monthEnd
       )
-      .reduce((total, entry) => total + getValidatedEntryDurationHours(entry), 0);
+      .reduce((total, entry) => total + getValidatedEntryDurationHours(entry, options), 0);
   },
 
   getAvailabilityStatus: (employeeId, date) =>

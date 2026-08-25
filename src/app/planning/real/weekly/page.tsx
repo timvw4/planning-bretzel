@@ -88,6 +88,11 @@ export default function RealWeeklyPlanningPage() {
   const [manualOpen, setManualOpen] = useState(false);
 
   const shiftMap = useMemo(() => new Map(shifts.map((s) => [s.id, s])), [shifts]);
+  // Réglage « déduire les pauses » : appliqué à tous les totaux de cette vue.
+  const hoursOptions = useMemo(
+    () => ({ deductBreaks: settings.deductBreaks === true }),
+    [settings.deductBreaks]
+  );
 
   const weekStart = startOfWeek(currentWeekDate, { weekStartsOn: 1 });
   const weekEnd = endOfWeek(currentWeekDate, { weekStartsOn: 1 });
@@ -137,7 +142,9 @@ export default function RealWeeklyPlanningPage() {
       validatedEnd: validated.end,
       plannedStart: planned.start,
       plannedEnd: planned.end,
-      pause15min: decl?.pause_15min ?? true,
+      // La pause retenue sur la journée validée fait référence ; à défaut,
+      // on reprend ce que l'employé a déclaré à la fin de son service.
+      pauseMinutes: entry.validatedBreakMinutes ?? decl?.pause_minutes ?? 0,
       hadSnack: decl?.had_snack ?? false,
       ateWorkFood: decl?.ate_work_food ?? false,
     });
@@ -403,7 +410,9 @@ export default function RealWeeklyPlanningPage() {
                     const entry = scheduleEntries.find(
                       (e) => e.employeeId === emp.id && e.date === dateStr
                     );
-                    return sum + (entry ? getValidatedEntryDurationHours(entry) : 0);
+                    return (
+                      sum + (entry ? getValidatedEntryDurationHours(entry, hoursOptions) : 0)
+                    );
                   }, 0);
                   return (
                     <td key={dateStr} className="border-r border-slate-200 px-2 py-2 text-center">

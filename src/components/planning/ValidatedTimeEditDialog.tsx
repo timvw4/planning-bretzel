@@ -13,6 +13,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { calculateShiftDuration, formatHours } from '@/lib/utils';
+import { formatBreakMinutes } from '@/lib/swissBreaks';
+import { BreakMinutesField } from '@/components/planning/BreakMinutesField';
 
 export interface ValidatedTimeEditTarget {
   employeeId: string;
@@ -24,13 +26,13 @@ export interface ValidatedTimeEditTarget {
   validatedEnd: string;
   plannedStart?: string;
   plannedEnd?: string;
-  pause15min: boolean;
+  pauseMinutes: number;
   hadSnack: boolean;
   ateWorkFood: boolean;
 }
 
 export interface ValidatedTimeEditOptions {
-  pause15min: boolean;
+  pauseMinutes: number;
   hadSnack: boolean;
   ateWorkFood: boolean;
 }
@@ -53,7 +55,7 @@ export function ValidatedTimeEditDialog({
 }: ValidatedTimeEditDialogProps) {
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
-  const [pause15min, setPause15min] = useState(true);
+  const [pauseMinutes, setPauseMinutes] = useState(0);
   const [hadSnack, setHadSnack] = useState(false);
   const [ateWorkFood, setAteWorkFood] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -64,7 +66,7 @@ export function ValidatedTimeEditDialog({
     if (!target || !open) return;
     setStart(target.validatedStart);
     setEnd(target.validatedEnd);
-    setPause15min(target.pause15min);
+    setPauseMinutes(target.pauseMinutes);
     setHadSnack(target.hadSnack);
     setAteWorkFood(target.ateWorkFood);
     setDeleteConfirmOpen(false);
@@ -82,7 +84,7 @@ export function ValidatedTimeEditDialog({
     if (calculateShiftDuration(start, end) <= 0) return;
     setSubmitting(true);
     try {
-      await onSave(start, end, { pause15min, hadSnack, ateWorkFood });
+      await onSave(start, end, { pauseMinutes, hadSnack, ateWorkFood });
       onOpenChange(false);
     } finally {
       setSubmitting(false);
@@ -152,22 +154,27 @@ export function ValidatedTimeEditDialog({
               <p className="text-xs text-slate-500">
                 Durée :{' '}
                 <span className="font-semibold text-slate-700">{formatHours(duration)}</span>
+                {pauseMinutes > 0 && (
+                  <>
+                    {' '}· pause {formatBreakMinutes(pauseMinutes)} ·{' '}
+                    <span className="font-semibold text-slate-700">
+                      {formatHours(Math.max(duration - pauseMinutes / 60, 0))}
+                    </span>{' '}
+                    hors pause
+                  </>
+                )}
               </p>
             )}
 
-            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-2">
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-3">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
                 Pause &amp; repas
               </p>
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={pause15min}
-                  onChange={(e) => setPause15min(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
-                />
-                <span className="text-sm text-slate-700">Pause 15 min</span>
-              </label>
+              <BreakMinutesField
+                value={pauseMinutes}
+                onChange={setPauseMinutes}
+                workedHours={duration}
+              />
               <label className="flex items-start gap-2.5 cursor-pointer">
                 <input
                   type="checkbox"
@@ -200,7 +207,7 @@ export function ValidatedTimeEditDialog({
                 onClick={() => setDeleteConfirmOpen(true)}
               >
                 <Trash2 className="w-3.5 h-3.5 shrink-0" />
-                Supprimer cette journée
+                Retirer cette journée
               </Button>
             )}
 
@@ -221,15 +228,16 @@ export function ValidatedTimeEditDialog({
       <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Supprimer cette journée ?</DialogTitle>
+            <DialogTitle>Retirer cette journée ?</DialogTitle>
             <DialogDescription asChild>
               <div className="space-y-2 text-sm text-slate-500">
                 <p>
                   {target.employeeName} — {target.dateLabel}
                 </p>
                 <p>
-                  La journée disparaîtra du planning réel et le pointage sera supprimé.
-                  L’employé pourra pointer à nouveau ce jour-là si besoin.
+                  La journée disparaîtra du planning réel et le pointage sera archivé :
+                  il n’apparaîtra plus dans les écrans, mais reste conservé comme
+                  justificatif. L’employé pourra pointer à nouveau ce jour-là.
                 </p>
               </div>
             </DialogDescription>
@@ -250,7 +258,7 @@ export function ValidatedTimeEditDialog({
               disabled={deleting}
               onClick={() => void handleDelete()}
             >
-              {deleting ? 'Suppression…' : 'Confirmer la suppression'}
+              {deleting ? 'Archivage…' : 'Confirmer le retrait'}
             </Button>
           </DialogFooter>
         </DialogContent>

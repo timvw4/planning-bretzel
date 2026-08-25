@@ -25,9 +25,14 @@ export interface TimePunchRow {
   approved_start_mode: ApprovedTimeMode | null;
   approved_end_mode: ApprovedTimeMode | null;
   status: PunchStatus;
+  /** Ancienne case « pause de 15 min » ; conservée en phase avec pause_minutes. */
   pause_15min: boolean;
+  /** Durée de pause déclarée, en minutes (barème LTr art. 15). */
+  pause_minutes: number;
   had_snack: boolean;
   ate_work_food: boolean;
+  /** Renseigné quand le pointage est archivé : il n'apparaît plus dans les écrans. */
+  deleted_at?: string | null;
   auto_closed: boolean;
   admin_note: string | null;
   reviewed_at: string | null;
@@ -86,13 +91,15 @@ export async function syncScheduleFromApproved(
   employeeId: string,
   date: string,
   start: string,
-  end: string
+  end: string,
+  breakMinutes?: number
 ) {
   await supabase
     .from('schedule_entries')
     .update({
       validated_start: start,
       validated_end: end,
+      validated_break_minutes: breakMinutes ?? null,
       is_modified: true,
     })
     .eq('employee_id', employeeId)
@@ -224,6 +231,7 @@ export async function runAutoCloseStalePunches(
     .from('time_declarations')
     .select('id, clock_in_at')
     .eq('status', 'in_progress')
+    .is('deleted_at', null)
     .not('clock_in_at', 'is', null)
     .lt('clock_in_at', cutoff);
 
@@ -311,7 +319,8 @@ export async function countPunchesAwaitingReview(
   const { count, error } = await supabase
     .from('time_declarations')
     .select('*', { count: 'exact', head: true })
-    .in('status', ADMIN_ACTION_STATUSES);
+    .in('status', ADMIN_ACTION_STATUSES)
+    .is('deleted_at', null);
   if (error) {
     console.error(error);
     return 0;
@@ -344,6 +353,7 @@ export async function fetchGeofencePunchAlerts(
       'id, employee_id, date, clock_in_at, clock_out_at, clock_in_inside_geofence, clock_out_inside_geofence'
     )
     .gte('date', since)
+    .is('deleted_at', null)
     .or('clock_in_inside_geofence.eq.false,clock_out_inside_geofence.eq.false')
     .order('date', { ascending: false })
     .limit(100);
@@ -385,6 +395,68 @@ export async function fetchGeofencePunchAlerts(
         resolved: false,
       });
     }
+  }
+
+  return alerts;
+}
+
+/** Jours passés examinés pour repérer les journées non pointées. */
+const MISSING_PUNCH_ALERT_DAYS = 21;
+
+/**
+ * Alertes cloche : journée de travail planifiée dans le passé pour laquelle
+ * aucun pointage n'existe. La journée du jour est exclue (elle n'est pas
+ * terminée), et les journées déjà validées à la main dans le planning réel
+ * ne remontent pas non plus.
+ */
+export async function fetchMissingPunchAlerts(
+  supabase: SupabaseClient,
+  employees: Employee[],
+  plannedWorkDays: { employeeId: string; date: string; validated: boolean }[],
+  daysBack = MISSING_PUNCH_ALERT_DAYS
+): Promise<PlanningAlert[]> {
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const since = format(subDays(new Date(), daysBack), 'yyyy-MM-dd');
+
+  const candidates = plannedWorkDays.filter(
+    (d) => !d.validated && d.date >= since && d.date < today
+  );
+  if (candidates.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('time_declarations')
+    .select('employee_id, date')
+    .gte('date', since)
+    .lt('date', today)
+    .is('deleted_at', null);
+
+  if (error) {
+    console.error(error);
+    return [];
+  }
+
+  const punched = new Set(
+    (data ?? []).map((row) => `${row.employee_id}|${row.date}`)
+  );
+  const empMap = new Map(employees.map((e) => [e.id, e]));
+  const alerts: PlanningAlert[] = [];
+
+  for (const day of candidates) {
+    if (punched.has(`${day.employeeId}|${day.date}`)) continue;
+    const emp = empMap.get(day.employeeId);
+    // Un employé parti ne pointera jamais ses anciennes journées : inutile
+    // d'encombrer la cloche avec ça.
+    if (!emp || !emp.isActive) continue;
+
+    alerts.push({
+      id: `missing-punch-${day.employeeId}-${day.date}`,
+      type: 'missing_punch',
+      severity: 'warning',
+      message: `${emp.firstName} ${emp.lastName} était planifié(e) le ${format(parseISO(day.date), 'd MMMM', { locale: fr })} sans aucun pointage`,
+      employeeId: day.employeeId,
+      date: day.date,
+      resolved: false,
+    });
   }
 
   return alerts;

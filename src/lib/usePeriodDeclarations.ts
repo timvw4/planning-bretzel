@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { defaultBreakMinutes } from '@/lib/swissBreaks';
 
-/** Options repas / pause cochées à la fin de service pour une cellule du planning. */
+/** Options repas / pause déclarées à la fin de service pour une cellule du planning. */
 export interface CellDeclarationFlags {
   pause_15min: boolean;
+  /** Durée de pause déclarée, en minutes. */
+  pause_minutes: number;
   had_snack: boolean;
   ate_work_food: boolean;
 }
@@ -26,9 +29,12 @@ export function usePeriodDeclarations(rangeStart: string, rangeEnd: string) {
       const supabase = createClient();
       const { data, error } = await supabase
         .from('time_declarations')
-        .select('employee_id, date, pause_15min, had_snack, ate_work_food, clock_out_at')
+        .select(
+          'employee_id, date, pause_15min, pause_minutes, had_snack, ate_work_food, clock_out_at'
+        )
         .gte('date', rangeStart)
         .lte('date', rangeEnd)
+        .is('deleted_at', null)
         .not('clock_out_at', 'is', null);
 
       if (cancelled) return;
@@ -43,6 +49,7 @@ export function usePeriodDeclarations(rangeStart: string, rangeEnd: string) {
       for (const row of data ?? []) {
         map.set(declarationKey(row.employee_id, row.date), {
           pause_15min: row.pause_15min ?? true,
+          pause_minutes: defaultBreakMinutes(row.pause_minutes, row.pause_15min),
           had_snack: row.had_snack ?? false,
           ate_work_food: row.ate_work_food ?? false,
         });

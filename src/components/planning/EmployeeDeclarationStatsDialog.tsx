@@ -90,10 +90,11 @@ export function EmployeeDeclarationStatsDialog({
       const supabase = createClient();
       const { data, error } = await supabase
         .from('time_declarations')
-        .select('date, pause_15min, had_snack, ate_work_food, clock_out_at')
+        .select('date, pause_15min, pause_minutes, had_snack, ate_work_food, clock_out_at')
         .eq('employee_id', employee!.id)
         .gte('date', rangeStart)
         .lte('date', rangeEnd)
+        .is('deleted_at', null)
         .not('clock_out_at', 'is', null)
         .order('date', { ascending: false });
 

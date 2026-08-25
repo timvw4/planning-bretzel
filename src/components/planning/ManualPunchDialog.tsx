@@ -10,9 +10,11 @@ import {
   isDeclarableWorkShift,
   syncScheduleFromApproved,
 } from '@/lib/timePunches';
+import { calculateShiftDuration } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { BreakMinutesField } from '@/components/planning/BreakMinutesField';
 import {
   Dialog,
   DialogContent,
@@ -48,7 +50,7 @@ export function ManualPunchDialog({
   const [needsShiftPick, setNeedsShiftPick] = useState(false);
   const [existingPunch, setExistingPunch] = useState(false);
   const [loadingContext, setLoadingContext] = useState(false);
-  const [pause15min, setPause15min] = useState(true);
+  const [pauseMinutes, setPauseMinutes] = useState(0);
   const [hadSnack, setHadSnack] = useState(false);
   const [ateWorkFood, setAteWorkFood] = useState(false);
   const [note, setNote] = useState('');
@@ -85,7 +87,7 @@ export function ManualPunchDialog({
     setShiftId('');
     setNeedsShiftPick(false);
     setExistingPunch(false);
-    setPause15min(true);
+    setPauseMinutes(0);
     setHadSnack(false);
     setAteWorkFood(false);
     setNote('');
@@ -109,6 +111,7 @@ export function ManualPunchDialog({
           .select('id')
           .eq('employee_id', employeeId)
           .eq('date', date)
+          .is('deleted_at', null)
           .maybeSingle(),
         supabase
           .from('schedule_entries')
@@ -230,7 +233,9 @@ export function ManualPunchDialog({
       approved_end_mode: 'actual',
       status: 'approved',
       reviewed_at: now,
-      pause_15min: pause15min,
+      pause_minutes: pauseMinutes,
+      // L'ancienne case reste alignée pour les écrans qui l'affichent encore.
+      pause_15min: pauseMinutes >= 15,
       had_snack: hadSnack,
       ate_work_food: ateWorkFood,
       note: note.trim() || null,
@@ -246,7 +251,14 @@ export function ManualPunchDialog({
       return;
     }
 
-    await syncScheduleFromApproved(supabase, employeeId, date, startTime, endTime);
+    await syncScheduleFromApproved(
+      supabase,
+      employeeId,
+      date,
+      startTime,
+      endTime,
+      pauseMinutes
+    );
     await usePlanningStore.getState().loadData({ silent: true });
     toast.success('Pointage ajouté — la journée apparaît dans le planning réel');
     setSubmitting(false);
@@ -352,15 +364,13 @@ export function ManualPunchDialog({
           </div>
 
           <div className="space-y-2">
-            <label className="flex items-start gap-2.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={pause15min}
-                onChange={(e) => setPause15min(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
-              />
-              <span className="text-sm text-slate-700">Pause 15 min</span>
-            </label>
+            <BreakMinutesField
+              value={pauseMinutes}
+              onChange={setPauseMinutes}
+              workedHours={
+                startTime && endTime ? calculateShiftDuration(startTime, endTime) : 0
+              }
+            />
             <label className="flex items-start gap-2.5 cursor-pointer">
               <input
                 type="checkbox"

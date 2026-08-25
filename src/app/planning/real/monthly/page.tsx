@@ -34,6 +34,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -92,6 +93,11 @@ export default function RealMonthlyPlanningPage() {
 
   const holidayMap = new Map((settings.holidays ?? []).map((h) => [h.date, h.name]));
   const shiftMap = useMemo(() => new Map(shifts.map((s) => [s.id, s])), [shifts]);
+  // Réglage « déduire les pauses » : appliqué à tous les totaux de cette vue.
+  const hoursOptions = useMemo(
+    () => ({ deductBreaks: settings.deductBreaks === true }),
+    [settings.deductBreaks]
+  );
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
@@ -148,7 +154,9 @@ export default function RealMonthlyPlanningPage() {
       validatedEnd: validated.end,
       plannedStart: planned.start,
       plannedEnd: planned.end,
-      pause15min: decl?.pause_15min ?? true,
+      // La pause retenue sur la journée validée fait référence ; à défaut,
+      // on reprend ce que l'employé a déclaré à la fin de son service.
+      pauseMinutes: entry.validatedBreakMinutes ?? decl?.pause_minutes ?? 0,
       hadSnack: decl?.had_snack ?? false,
       ateWorkFood: decl?.ate_work_food ?? false,
     });
@@ -196,6 +204,31 @@ export default function RealMonthlyPlanningPage() {
     toast.success('PDF téléchargé — vérifiez votre dossier Téléchargements');
   };
 
+  // Récapitulatif comptable : bornes strictes du mois (pas les semaines complètes)
+  const payrollInput = () => ({
+    employees: displayedEmployees,
+    shifts,
+    entries: scheduleEntries,
+    periodStart: monthStartStr,
+    periodEnd: monthEndStr,
+    companyName: settings.companyName,
+    holidays: settings.holidays ?? [],
+    deductBreaks: settings.deductBreaks === true,
+    getDeclarations,
+  });
+
+  const handleExportPayrollExcel = async () => {
+    const { exportPayrollExcel } = await import('@/lib/payrollExport');
+    await exportPayrollExcel(payrollInput());
+    toast.success('Récapitulatif comptable exporté en Excel');
+  };
+
+  const handleExportPayrollPDF = async () => {
+    const { exportPayrollPDF } = await import('@/lib/payrollExport');
+    await exportPayrollPDF(payrollInput());
+    toast.success('Récapitulatif comptable exporté en PDF');
+  };
+
   return (
     <div className="flex flex-col min-h-screen bg-slate-50/50">
       <Header
@@ -209,13 +242,31 @@ export default function RealMonthlyPlanningPage() {
                 <ChevronDown className="h-3.5 w-3.5 opacity-50" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Exporter</DropdownMenuLabel>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuLabel>Planning (vue calendrier)</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => void handleExportExcel()}>
                 Excel
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => void handleExportPDF()}>
                 PDF
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Récapitulatif comptable</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => void handleExportPayrollExcel()}>
+                <span className="flex flex-col items-start">
+                  <span>Excel (recommandé)</span>
+                  <span className="text-[11px] text-slate-500">
+                    Totaux + journal détaillé
+                  </span>
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void handleExportPayrollPDF()}>
+                <span className="flex flex-col items-start">
+                  <span>PDF</span>
+                  <span className="text-[11px] text-slate-500">
+                    Document à viser / archiver
+                  </span>
+                </span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -417,7 +468,9 @@ export default function RealMonthlyPlanningPage() {
                     const entry = scheduleEntries.find(
                       (e) => e.employeeId === emp.id && e.date === dateStr
                     );
-                    return sum + (entry ? getValidatedEntryDurationHours(entry) : 0);
+                    return (
+                      sum + (entry ? getValidatedEntryDurationHours(entry, hoursOptions) : 0)
+                    );
                   }, 0);
                   return (
                     <td key={dateStr} className="border-r border-slate-200 px-1 py-2 text-center">

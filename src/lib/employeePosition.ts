@@ -50,16 +50,29 @@ export function getStoredAvailabilityOnWorkDay(
 }
 
 /** Mode de marquage selon le type de contrat. */
-export type AvailabilityExceptionMode = 'vacation_only' | 'unavailable_only';
+export type AvailabilityExceptionMode =
+  | 'vacation_only'
+  | 'unavailable_only'
+  | 'vacation_and_unavailable';
 
-/** Cycle employé selon le contrat : vacances seules (fixe) ou indispos seules (à l’heure, etc.). */
+/**
+ * Cycle employé selon le contrat :
+ * - salarié fixe : Normal → Vacances → Indispo → Normal
+ * - employé à l’heure / stagiaire / apprenti : Normal → Indispo → Normal
+ */
 export function getNextStoredAvailabilityStatus(
   current: StoredAvailabilityStatus | null,
   options?: { mode?: AvailabilityExceptionMode; allowVacation?: boolean }
 ): StoredAvailabilityStatus | null {
   const mode: AvailabilityExceptionMode =
     options?.mode ??
-    (options?.allowVacation === false ? 'unavailable_only' : 'vacation_only');
+    (options?.allowVacation === false ? 'unavailable_only' : 'vacation_and_unavailable');
+
+  if (mode === 'vacation_and_unavailable') {
+    if (current === null) return 'vacation';
+    if (current === 'vacation') return 'unavailable';
+    return null;
+  }
 
   if (mode === 'vacation_only') {
     if (current === null) return 'vacation';

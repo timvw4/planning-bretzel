@@ -22,6 +22,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { calculateShiftDuration, formatHours } from '@/lib/utils';
+import { netWorkedHours } from '@/lib/swissBreaks';
 
 const MONTHS_TO_SHOW = 12;
 
@@ -36,6 +37,7 @@ interface ValidatedEntry {
   date: string;
   validatedStart: string;
   validatedEnd: string;
+  breakMinutes: number;
   shift: ShiftInfo | null;
 }
 
@@ -58,6 +60,8 @@ export default function EmployeeHistoriquePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [entries, setEntries] = useState<ValidatedEntry[]>([]);
   const [currentMonth, setCurrentMonth] = useState(() => startOfMonth(new Date()));
+  /** Réglage de l'établissement : les pauses sont-elles retirées des heures ? */
+  const [deductBreaks, setDeductBreaks] = useState(false);
 
   const now = useMemo(() => new Date(), []);
   const earliestMonth = useMemo(
@@ -95,7 +99,7 @@ export default function EmployeeHistoriquePage() {
     const { data, error } = await supabase
       .from('schedule_entries')
       .select(
-        'date, validated_start, validated_end, shifts (short_name, name, color, text_color)'
+        'date, validated_start, validated_end, validated_break_minutes, shifts (short_name, name, color, text_color)'
       )
       .eq('employee_id', employeeId)
       .eq('visible_to_employee', true)
@@ -117,6 +121,7 @@ export default function EmployeeHistoriquePage() {
       date: row.date,
       validatedStart: row.validated_start,
       validatedEnd: row.validated_end,
+      breakMinutes: row.validated_break_minutes ?? 0,
       shift: row.shifts
         ? {
             shortName: row.shifts.short_name,
@@ -128,6 +133,13 @@ export default function EmployeeHistoriquePage() {
     }));
 
     setEntries(parsed);
+
+    const { data: settingsRow } = await supabase
+      .from('app_settings')
+      .select('deduct_breaks')
+      .maybeSingle();
+    setDeductBreaks(settingsRow?.deduct_breaks === true);
+
     setLoading(false);
     setRefreshing(false);
   }, [employeeId, earliestMonth, now]);
@@ -146,14 +158,20 @@ export default function EmployeeHistoriquePage() {
     [entries, monthStartStr, monthEndStr]
   );
 
-  const monthHours = useMemo(
-    () =>
-      monthEntries.reduce(
-        (sum, e) =>
-          sum + calculateShiftDuration(e.validatedStart, e.validatedEnd),
-        0
+  /** Heures d'une journée, pause retirée si l'établissement la déduit. */
+  const entryHours = useCallback(
+    (entry: ValidatedEntry) =>
+      netWorkedHours(
+        calculateShiftDuration(entry.validatedStart, entry.validatedEnd),
+        entry.breakMinutes,
+        deductBreaks
       ),
-    [monthEntries]
+    [deductBreaks]
+  );
+
+  const monthHours = useMemo(
+    () => monthEntries.reduce((sum, e) => sum + entryHours(e), 0),
+    [monthEntries, entryHours]
   );
 
   const canGoPrev = startOfMonth(currentMonth) > earliestMonth;
@@ -303,10 +321,7 @@ export default function EmployeeHistoriquePage() {
         ) : (
           monthEntries.map((entry) => {
             const d = parseISO(entry.date);
-            const duration = calculateShiftDuration(
-              entry.validatedStart,
-              entry.validatedEnd
-            );
+            const duration = entryHours(entry);
             return (
               <div
                 key={entry.date}

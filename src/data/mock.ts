@@ -352,11 +352,14 @@ export const defaultSettings: AppSettings = {
   timezone: 'Europe/Zurich',
   theme: 'light',
   planningMonthMode: 'strict',
+  deductBreaks: false,
   notifications: {
     overtime: true,
     unavailable: true,
     lowRest: true,
     geofencePunch: true,
+    missingPunch: true,
+    shortBreak: true,
   },
   workSite: null,
   holidays: [

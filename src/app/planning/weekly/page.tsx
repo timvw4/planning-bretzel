@@ -54,7 +54,8 @@ import {
   getPlannedEntryDurationHours,
   calculateShiftDuration,
   availabilityMapKey,
-  detectAlerts,
+  detectScheduleAlerts,
+  filterAlertsByNotifications,
 } from '@/lib/utils';
 import { AvailabilityStatusIcon, availabilityStatusMeta } from '@/components/availability/AvailabilityStatusIcon';
 import { getPositionLabel } from '@/lib/employeePosition';
@@ -135,8 +136,18 @@ export default function WeeklyPlanningPage() {
   const holidayMap = new Map((settings.holidays ?? []).map((h) => [h.date, h.name]));
 
   const viewedWeekAlerts = useMemo(
-    () => detectAlerts(scheduleEntries, employees, shifts, weekStartStr, weekEndStr),
-    [scheduleEntries, employees, shifts, weekStartStr, weekEndStr]
+    () =>
+      filterAlertsByNotifications(
+        detectScheduleAlerts(
+          scheduleEntries,
+          employees,
+          shifts,
+          { from: weekStartStr, to: weekEndStr },
+          settings
+        ),
+        settings.notifications
+      ),
+    [scheduleEntries, employees, shifts, weekStartStr, weekEndStr, settings]
   );
 
   const activeAlerts = useMemo(() => {

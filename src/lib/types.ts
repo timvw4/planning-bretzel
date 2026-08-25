@@ -57,6 +57,8 @@ export interface ScheduleEntry {
   /** Heures réelles validées (après approbation admin des déclarations) — remplacent l’affichage prévu du shift */
   validatedStart?: string | null;
   validatedEnd?: string | null;
+  /** Pause retenue sur la journée validée, en minutes (barème LTr art. 15). */
+  validatedBreakMinutes?: number | null;
 }
 
 export type AlertSeverity = 'error' | 'warning' | 'info';
@@ -71,7 +73,11 @@ export interface PlanningAlert {
     | 'rest'
     | 'understaffed'
     | 'geofence_clock_in'
-    | 'geofence_clock_out';
+    | 'geofence_clock_out'
+    /** Journée de travail passée sans aucun pointage. */
+    | 'missing_punch'
+    /** Pause enregistrée inférieure au minimum légal de la journée. */
+    | 'short_break';
   severity: AlertSeverity;
   message: string;
   employeeId?: string;
@@ -100,6 +106,10 @@ export interface NotificationSettings {
   lowRest: boolean;
   /** Alerte cloche : pointage entrée/sortie hors périmètre GPS. */
   geofencePunch: boolean;
+  /** Alerte cloche : journée de travail passée sans pointage. */
+  missingPunch: boolean;
+  /** Alerte cloche : pause plus courte que le minimum légal. */
+  shortBreak: boolean;
 }
 
 /** Périmètre GPS du lieu de travail (centre + rayon en mètres). */
@@ -120,6 +130,8 @@ export interface AppSettings {
   theme: 'light' | 'dark' | 'system';
   holidays: PublicHoliday[];
   planningMonthMode: PlanningMonthMode;
+  /** Si vrai, les pauses sont retirées des heures payées affichées et exportées. */
+  deductBreaks: boolean;
   notifications: NotificationSettings;
   /** Optionnel : configuré dans Paramètres pour comparer les déclarations d'heures. */
   workSite?: WorkSiteGeofence | null;

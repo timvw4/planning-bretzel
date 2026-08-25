@@ -23,12 +23,17 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { usePlanningStore } from '@/lib/store';
-import { PublicHoliday } from '@/lib/types';
 import {
   SWISS_DEFAULT_MAX_WEEKLY_HOURS,
   SWISS_LEGAL_MAX_WEEKLY_HOURS,
   SWISS_MIN_REST_HOURS,
 } from '@/lib/swissLabor';
+import {
+  SWISS_CANTON_CODES,
+  SWISS_CANTON_LABELS,
+  getSwissHolidays,
+  type SwissCantonCode,
+} from '@/lib/swissHolidays';
 
 const WorkSiteMapPicker = dynamic(
   () => import('@/components/settings/WorkSiteMapPicker').then((mod) => mod.WorkSiteMapPicker),
@@ -105,44 +110,6 @@ function ToggleRow({
   );
 }
 
-// ---- Jours fériés français par année ----
-function getFrenchHolidays(year: number): PublicHoliday[] {
-  // Calcul de la date de Pâques (algorithme de Meeus/Jones/Butcher)
-  const a = year % 19;
-  const b = Math.floor(year / 100);
-  const c = year % 100;
-  const d = Math.floor(b / 4);
-  const e = b % 4;
-  const f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3);
-  const h = (19 * a + b - d - g + 15) % 30;
-  const i = Math.floor(c / 4);
-  const k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7;
-  const m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const easterMonth = Math.floor((h + l - 7 * m + 114) / 31);
-  const easterDay = ((h + l - 7 * m + 114) % 31) + 1;
-  const easter = new Date(year, easterMonth - 1, easterDay);
-  const easterMonday = new Date(easter); easterMonday.setDate(easter.getDate() + 1);
-  const ascension  = new Date(easter); ascension.setDate(easter.getDate() + 39);
-  const pentecost  = new Date(easter); pentecost.setDate(easter.getDate() + 50);
-
-  const fmt = (d: Date) => format(d, 'yyyy-MM-dd');
-  return [
-    { date: `${year}-01-01`, name: 'Jour de l\'An' },
-    { date: fmt(easterMonday),  name: 'Lundi de Pâques' },
-    { date: `${year}-05-01`, name: 'Fête du Travail' },
-    { date: `${year}-05-08`, name: 'Victoire 1945' },
-    { date: fmt(ascension),     name: 'Ascension' },
-    { date: fmt(pentecost),     name: 'Lundi de Pentecôte' },
-    { date: `${year}-07-14`, name: 'Fête Nationale' },
-    { date: `${year}-08-15`, name: 'Assomption' },
-    { date: `${year}-11-01`, name: 'Toussaint' },
-    { date: `${year}-11-11`, name: 'Armistice' },
-    { date: `${year}-12-25`, name: 'Noël' },
-  ].sort((a, b) => a.date.localeCompare(b.date));
-}
-
 export default function SettingsPage() {
   const { settings, updateSettings, employees, shifts, scheduleEntries } = usePlanningStore();
 
@@ -151,6 +118,8 @@ export default function SettingsPage() {
     unavailable: true,
     lowRest: true,
     geofencePunch: true,
+    missingPunch: true,
+    shortBreak: true,
   };
   const [notifications, setNotifications] = useState(
     settings.notifications ?? defaultNotifications
@@ -159,6 +128,9 @@ export default function SettingsPage() {
   // ---- État local pour le formulaire d'ajout de jour férié ----
   const [newHolidayDate, setNewHolidayDate] = useState('');
   const [newHolidayName, setNewHolidayName] = useState('');
+  // Canton utilisé pour le pré-remplissage : les jours fériés suisses sont
+  // fixés canton par canton, il n'existe pas de liste nationale unique.
+  const [canton, setCanton] = useState<SwissCantonCode>('CH');
 
   const holidays = settings.holidays ?? [];
 
@@ -191,12 +163,14 @@ export default function SettingsPage() {
 
   const handlePrefillHolidays = async () => {
     const year = getYear(new Date());
-    const prefilled = getFrenchHolidays(year);
+    const prefilled = getSwissHolidays(year, canton);
     const existing = holidays.filter((h) => !prefilled.some((p) => p.date === h.date));
     const merged = [...existing, ...prefilled].sort((a, b) => a.date.localeCompare(b.date));
     try {
       await updateSettings({ holidays: merged });
-      toast.success(`Jours fériés ${year} pré-remplis`);
+      toast.success(
+        `${prefilled.length} jours fériés ${year} ajoutés (${SWISS_CANTON_LABELS[canton]})`
+      );
     } catch {
       /* erreur déjà affichée par le store */
     }
@@ -263,32 +237,13 @@ export default function SettingsPage() {
               placeholder="Bretzel"
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Langue</Label>
-              <select
-                value={settings.locale}
-                onChange={(e) => updateSettings({ locale: e.target.value })}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="fr-FR">Français</option>
-                <option value="en-GB">English</option>
-                <option value="de-DE">Deutsch</option>
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Fuseau horaire</Label>
-              <select
-                value={settings.timezone}
-                onChange={(e) => updateSettings({ timezone: e.target.value })}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="Europe/Zurich">Europe/Zurich</option>
-                <option value="Europe/Paris">Europe/Paris</option>
-                <option value="Europe/London">Europe/London</option>
-                <option value="Europe/Berlin">Europe/Berlin</option>
-              </select>
-            </div>
+          <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              L&apos;application fonctionne en français, sur l&apos;heure suisse
+              (Europe/Zurich), et la semaine commence le lundi. Ces trois points
+              sont fixés : ils correspondent à l&apos;usage suisse et évitent des
+              écarts de calcul sur les pointages.
+            </p>
           </div>
         </SettingSection>
 
@@ -343,26 +298,19 @@ export default function SettingsPage() {
             </p>
           </div>
 
-          <div className="space-y-1.5">
-            <Label>Premier jour de la semaine</Label>
-            <div className="flex gap-2">
-              {[
-                { value: 1, label: 'Lundi' },
-                { value: 0, label: 'Dimanche' },
-              ].map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => updateSettings({ weekStartDay: opt.value as 0 | 1 })}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-all ${
-                    settings.weekStartDay === opt.value
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+          <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3 space-y-2">
+            <ToggleRow
+              label="Déduire les pauses des heures payées"
+              description="Barème suisse (art. 15 LTr) : 15 min au-delà de 5 h 30, 30 min au-delà de 7 h, 60 min au-delà de 9 h."
+              value={settings.deductBreaks === true}
+              onChange={(v) => void updateSettings({ deductBreaks: v })}
+            />
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              Désactivé, les pauses sont enregistrées et visibles mais l&apos;employé
+              est payé sur toute son amplitude. Activé, les totaux et l&apos;export
+              comptable retirent la pause de chaque journée : cela change les
+              heures payées de tout le monde, y compris sur les mois déjà validés.
+            </p>
           </div>
 
           <div className="space-y-2">
@@ -418,7 +366,7 @@ export default function SettingsPage() {
           <div className="space-y-3 divide-y divide-slate-50">
             <ToggleRow
               label="Heures supplémentaires"
-              description="Alerte si un employé dépasse son quota hebdomadaire"
+              description={`Alerte au-delà des heures du contrat, et en rouge au-delà de ${settings.maxWeeklyHours} h par semaine`}
               value={notifications.overtime}
               onChange={(v) => setNotifications((n) => ({ ...n, overtime: v }))}
             />
@@ -430,9 +378,21 @@ export default function SettingsPage() {
             />
             <ToggleRow
               label="Repos insuffisant"
-              description={`Alerte si moins de ${settings.minRestHours}h entre deux shifts`}
+              description={`Alerte si moins de ${settings.minRestHours} h entre la fin d'un service et le début du suivant`}
               value={notifications.lowRest}
               onChange={(v) => setNotifications((n) => ({ ...n, lowRest: v }))}
+            />
+            <ToggleRow
+              label="Journée non pointée"
+              description="Alerte quand une journée de travail passée n'a reçu aucun pointage"
+              value={notifications.missingPunch ?? true}
+              onChange={(v) => setNotifications((n) => ({ ...n, missingPunch: v }))}
+            />
+            <ToggleRow
+              label="Pause insuffisante"
+              description="Alerte quand la pause enregistrée est en dessous du minimum légal de la journée"
+              value={notifications.shortBreak ?? true}
+              onChange={(v) => setNotifications((n) => ({ ...n, shortBreak: v }))}
             />
             <ToggleRow
               label="Pointage hors périmètre GPS"
@@ -449,19 +409,41 @@ export default function SettingsPage() {
           title="Jours fériés"
           description="Les jours fériés sont mis en évidence dans les plannings"
         >
-          {/* Bouton pré-remplissage */}
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-slate-500">
-              {holidays.length} jour{holidays.length !== 1 ? 's' : ''} configuré{holidays.length !== 1 ? 's' : ''}
+          {/* Pré-remplissage par canton */}
+          <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3 space-y-2">
+            <div className="flex items-end gap-2">
+              <div className="space-y-1 flex-1">
+                <Label className="text-[11px]">Canton</Label>
+                <select
+                  value={canton}
+                  onChange={(e) => setCanton(e.target.value as SwissCantonCode)}
+                  className="h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                >
+                  {SWISS_CANTON_CODES.map((code) => (
+                    <option key={code} value={code}>
+                      {SWISS_CANTON_LABELS[code]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={handlePrefillHolidays}
+                className="h-8 flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-medium text-white hover:bg-indigo-700 transition-colors shrink-0"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Pré-remplir {getYear(new Date())}
+              </button>
+            </div>
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              Seul le 1<sup>er</sup> août est férié dans toute la Suisse : les autres
+              jours dépendent du canton, parfois de la commune. Vérifiez la liste
+              obtenue et ajustez-la si besoin juste en dessous.
             </p>
-            <button
-              onClick={handlePrefillHolidays}
-              className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700 transition-colors"
-            >
-              <RefreshCw className="w-3 h-3" />
-              Pré-remplir {getYear(new Date())}
-            </button>
           </div>
+
+          <p className="text-xs text-slate-500">
+            {holidays.length} jour{holidays.length !== 1 ? 's' : ''} configuré{holidays.length !== 1 ? 's' : ''}
+          </p>
 
           {/* Liste des jours fériés */}
           {holidays.length > 0 && (

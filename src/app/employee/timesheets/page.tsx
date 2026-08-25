@@ -39,6 +39,8 @@ import {
   timestampToHHMM,
   PUNCH_STATUS_LABEL,
 } from '@/lib/timePunches';
+import { legalBreakMinutes } from '@/lib/swissBreaks';
+import { BreakMinutesField } from '@/components/planning/BreakMinutesField';
 
 interface ShiftInfo {
   name: string;
@@ -102,7 +104,9 @@ export default function EmployeeTimesheetsPage() {
   const [clockInLoading, setClockInLoading] = useState(false);
   const [clockOutLoading, setClockOutLoading] = useState(false);
   const [outDialogOpen, setOutDialogOpen] = useState(false);
-  const [pause15min, setPause15min] = useState(true);
+  const [pauseMinutes, setPauseMinutes] = useState(0);
+  /** Durée travaillée au moment d'ouvrir la fenêtre de fin de service. */
+  const [outWorkedHours, setOutWorkedHours] = useState(0);
   const [hadSnack, setHadSnack] = useState(false);
   const [ateWorkFood, setAteWorkFood] = useState(false);
   const [note, setNote] = useState('');
@@ -153,7 +157,7 @@ export default function EmployeeTimesheetsPage() {
       supabase
         .from('time_declarations')
         .select(
-          'id, employee_id, date, planned_start, planned_end, clock_in_at, clock_out_at, actual_start, actual_end, status, pause_15min, had_snack, ate_work_food, auto_closed, admin_note, approved_start_mode, approved_end_mode, note'
+          'id, employee_id, date, planned_start, planned_end, clock_in_at, clock_out_at, actual_start, actual_end, status, pause_15min, pause_minutes, had_snack, ate_work_food, auto_closed, admin_note, approved_start_mode, approved_end_mode, note'
         )
         .eq('employee_id', employeeId)
         .gte('date', from)
@@ -223,7 +227,8 @@ export default function EmployeeTimesheetsPage() {
         clock_in_lng: geo.lng,
         clock_in_accuracy_m: geo.accuracy_m,
         clock_in_inside_geofence: geo.inside_geofence,
-        pause_15min: true,
+        pause_minutes: 0,
+        pause_15min: false,
         had_snack: false,
         ate_work_food: false,
       })
@@ -257,7 +262,9 @@ export default function EmployeeTimesheetsPage() {
         clock_out_lng: geo.lng,
         clock_out_accuracy_m: geo.accuracy_m,
         clock_out_inside_geofence: geo.inside_geofence,
-        pause_15min: pause15min,
+        pause_minutes: pauseMinutes,
+        // L'ancienne case reste alignée pour les écrans qui l'affichent encore.
+        pause_15min: pauseMinutes >= 15,
         had_snack: hadSnack,
         ate_work_food: ateWorkFood,
         note: note.trim() || null,
@@ -403,7 +410,13 @@ export default function EmployeeTimesheetsPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setPause15min(true);
+                  // Pause proposée par défaut : le minimum imposé par la loi
+                  // pour le temps déjà travaillé aujourd'hui.
+                  const worked = punch.clock_in_at
+                    ? (Date.now() - new Date(punch.clock_in_at).getTime()) / 3_600_000
+                    : 0;
+                  setOutWorkedHours(worked);
+                  setPauseMinutes(legalBreakMinutes(worked));
                   setHadSnack(false);
                   setAteWorkFood(false);
                   setNote('');
@@ -489,17 +502,12 @@ export default function EmployeeTimesheetsPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
-            <label className="flex items-start gap-2.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={pause15min}
-                onChange={(e) => setPause15min(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
-              />
-              <span className="text-sm text-slate-700">
-                J’ai pris une pause d’au moins <strong>15 minutes</strong>
-              </span>
-            </label>
+            <BreakMinutesField
+              value={pauseMinutes}
+              onChange={setPauseMinutes}
+              workedHours={outWorkedHours}
+              label="Combien de temps de pause avez-vous pris ?"
+            />
             <label className="flex items-start gap-2.5 cursor-pointer">
               <input
                 type="checkbox"

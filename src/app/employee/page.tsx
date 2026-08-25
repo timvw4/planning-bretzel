@@ -17,6 +17,7 @@ import {
 import { fr } from 'date-fns/locale';
 import { ChevronLeft, ChevronRight, Clock, Sun, Info } from 'lucide-react';
 import { getNextUpcomingWorkEntry, calculateShiftDuration, formatHours } from '@/lib/utils';
+import { netWorkedHours } from '@/lib/swissBreaks';
 
 interface Shift {
   id: string;
@@ -34,6 +35,8 @@ interface ScheduleEntry {
   date: string;
   validatedStart: string | null;
   validatedEnd: string | null;
+  /** Pause retenue sur la journée validée, en minutes. */
+  breakMinutes: number;
   shift: Shift;
 }
 
@@ -100,6 +103,8 @@ export default function EmployeeSchedulePage() {
   const [isFetching, setIsFetching] = useState(false); // assombrissement pendant navigation
   const [employeeId, setEmployeeId] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
+  /** Réglage de l'établissement : les pauses sont-elles retirées des heures ? */
+  const [deductBreaks, setDeductBreaks] = useState(false);
   /** Clé qui change quand les nouvelles données arrivent → déclenche l'animation */
   const [calendarKey, setCalendarKey] = useState(0);
   /** Classe d'animation appliquée lors du changement de clé */
@@ -143,7 +148,7 @@ export default function EmployeeSchedulePage() {
 
     const { data } = await supabase
       .from('schedule_entries')
-      .select(`date, validated_start, validated_end, shifts (id, name, short_name, type, start_time, end_time, color, text_color, duration_hours)`)
+      .select(`date, validated_start, validated_end, validated_break_minutes, shifts (id, name, short_name, type, start_time, end_time, color, text_color, duration_hours)`)
       .eq('employee_id', employeeId)
       .eq('visible_to_employee', true)
       .gte('date', start)
@@ -163,6 +168,7 @@ export default function EmployeeSchedulePage() {
           date: row.date,
           validatedStart: row.validated_start ?? null,
           validatedEnd: row.validated_end ?? null,
+          breakMinutes: row.validated_break_minutes ?? 0,
           shift: {
             id: row.shifts.id,
             name: row.shifts.name,
@@ -177,6 +183,12 @@ export default function EmployeeSchedulePage() {
         };
       }));
     }
+
+    const { data: settingsRow } = await supabase
+      .from('app_settings')
+      .select('deduct_breaks')
+      .maybeSingle();
+    setDeductBreaks(settingsRow?.deduct_breaks === true);
 
     // Détermine la classe d'animation selon la direction capturée au clic
     const dir = pendingDir.current;
@@ -256,7 +268,12 @@ export default function EmployeeSchedulePage() {
   const totalHours = entriesForStats.reduce(
     (s, e) =>
       e.validatedStart && e.validatedEnd
-        ? s + calculateShiftDuration(e.validatedStart, e.validatedEnd)
+        ? s +
+          netWorkedHours(
+            calculateShiftDuration(e.validatedStart, e.validatedEnd),
+            e.breakMinutes,
+            deductBreaks
+          )
         : s,
     0
   );

@@ -11,6 +11,8 @@ import {
   addMonths,
   subMonths,
   addDays,
+  subDays,
+  startOfWeek,
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import {
@@ -19,8 +21,12 @@ import {
   ScheduleEntry,
   PlanningAlert,
   DayColumn,
+  type AppSettings,
   type ContractType,
+  type NotificationSettings,
 } from './types';
+import { isBreakBelowLegal, legalBreakMinutes, netWorkedHours } from './swissBreaks';
+import { SWISS_MIN_REST_HOURS } from './swissLabor';
 
 // Utilitaire Tailwind + clsx
 export function cn(...inputs: ClassValue[]) {
@@ -103,11 +109,36 @@ export function getValidatedTimeRange(entry: ScheduleEntry): {
   };
 }
 
+/**
+ * Options de comptage des heures.
+ * `deductBreaks` reflète le réglage « déduire les pauses des heures
+ * payées » : laissé à faux, le total reste la simple amplitude fin − début.
+ */
+export interface HoursCountingOptions {
+  deductBreaks?: boolean;
+}
+
+/** Durée brute validée (amplitude fin − début), sans tenir compte de la pause. */
+export function getValidatedEntryGrossHours(entry: ScheduleEntry): number {
+  if (!entry.validatedStart || !entry.validatedEnd) return 0;
+  return calculateShiftDuration(entry.validatedStart, entry.validatedEnd);
+}
+
+/** Pause retenue sur une journée validée, en minutes (0 si non renseignée). */
+export function getEntryBreakMinutes(entry: ScheduleEntry): number {
+  const m = entry.validatedBreakMinutes;
+  return typeof m === 'number' && m > 0 ? m : 0;
+}
+
 /** Durée (heures) pour une entrée : validée si renseignée, sinon durée du shift. */
-export function getEntryDurationHours(entry: ScheduleEntry, shift: Shift | undefined): number {
+export function getEntryDurationHours(
+  entry: ScheduleEntry,
+  shift: Shift | undefined,
+  options?: HoursCountingOptions
+): number {
   if (!shift) return 0;
   if (entry.validatedStart && entry.validatedEnd) {
-    return calculateShiftDuration(entry.validatedStart, entry.validatedEnd);
+    return getValidatedEntryDurationHours(entry, options);
   }
   return shift.durationHours ?? 0;
 }
@@ -121,10 +152,14 @@ export function getPlannedEntryDurationHours(
   return shift.durationHours ?? 0;
 }
 
-/** Durée réelle validée ; 0 si le jour n’est pas validé. */
-export function getValidatedEntryDurationHours(entry: ScheduleEntry): number {
-  if (!entry.validatedStart || !entry.validatedEnd) return 0;
-  return calculateShiftDuration(entry.validatedStart, entry.validatedEnd);
+/** Heures payées d’une journée validée ; 0 si le jour n’est pas validé. */
+export function getValidatedEntryDurationHours(
+  entry: ScheduleEntry,
+  options?: HoursCountingOptions
+): number {
+  const gross = getValidatedEntryGrossHours(entry);
+  if (gross === 0) return 0;
+  return netWorkedHours(gross, getEntryBreakMinutes(entry), options?.deductBreaks === true);
 }
 
 /** Début du shift sur le jour `dateStr` (heure locale). */
@@ -175,125 +210,217 @@ export function formatHours(hours: number): string {
   return `${h}h${m.toString().padStart(2, '0')}`;
 }
 
-// ---- CALCUL DES HEURES PAR EMPLOYÉ ----
-export function getEmployeeHoursForPeriod(
-  employeeId: string,
-  entries: ScheduleEntry[],
-  shifts: Shift[],
-  startDate: string,
-  endDate: string
-): number {
-  const shiftMap = new Map(shifts.map((s) => [s.id, s]));
-
-  return entries
-    .filter(
-      (e) =>
-        e.employeeId === employeeId &&
-        e.date >= startDate &&
-        e.date <= endDate
-    )
-    .reduce((total, entry) => {
-      const shift = shiftMap.get(entry.shiftId);
-      return total + getEntryDurationHours(entry, shift);
-    }, 0);
+// ---- ALERTES PLANNING ----
+/** Plage de dates surveillée par la détection d’alertes (bornes incluses). */
+export interface AlertWindow {
+  from: string;
+  to: string;
 }
 
-// ---- ALERTES PLANNING ----
-export function detectAlerts(
+/** Réglages dont la détection d’alertes a besoin. */
+export type AlertSettings = Pick<AppSettings, 'minRestHours' | 'maxWeeklyHours'>;
+
+const DAY_NAMES: Record<number, string> = {
+  0: 'sunday',
+  1: 'monday',
+  2: 'tuesday',
+  3: 'wednesday',
+  4: 'thursday',
+  5: 'friday',
+  6: 'saturday',
+};
+
+/** Lundi de la semaine contenant `date`, au format yyyy-MM-dd. */
+function mondayOf(date: string): string {
+  return format(startOfWeek(parseISO(date), { weekStartsOn: 1 }), 'yyyy-MM-dd');
+}
+
+/**
+ * Alertes planning sur toute la plage demandée : dépassement d’heures
+ * (semaine par semaine), jour non disponible, repos trop court.
+ *
+ * Le repos est calculé sur de vraies dates-heures, ce qui tient compte des
+ * minutes, des services qui passent minuit et des jours non consécutifs.
+ */
+export function detectScheduleAlerts(
   entries: ScheduleEntry[],
   employees: Employee[],
   shifts: Shift[],
-  weekStart: string,
-  weekEnd: string
+  window: AlertWindow,
+  settings: AlertSettings
 ): PlanningAlert[] {
   const alerts: PlanningAlert[] = [];
   const shiftMap = new Map(shifts.map((s) => [s.id, s]));
-  const empMap = new Map(employees.map((e) => [e.id, e]));
+  const minRestHours =
+    Number.isFinite(settings.minRestHours) && settings.minRestHours > 0
+      ? settings.minRestHours
+      : SWISS_MIN_REST_HOURS;
+  const legalWeeklyMax =
+    Number.isFinite(settings.maxWeeklyHours) && settings.maxWeeklyHours > 0
+      ? settings.maxWeeklyHours
+      : 0;
 
-  // Grouper les entrées par employé
-  const entriesByEmp = new Map<string, ScheduleEntry[]>();
-  entries
-    .filter((e) => e.date >= weekStart && e.date <= weekEnd)
-    .forEach((entry) => {
-      const list = entriesByEmp.get(entry.employeeId) || [];
-      list.push(entry);
-      entriesByEmp.set(entry.employeeId, list);
-    });
+  const isWorkEntry = (entry: ScheduleEntry) =>
+    shiftMap.get(entry.shiftId)?.type === 'work';
 
-  entriesByEmp.forEach((empEntries, empId) => {
-    const employee = empMap.get(empId);
-    if (!employee) return;
+  for (const employee of employees) {
+    if (!employee.isActive) continue;
+    const empEntries = entries.filter((e) => e.employeeId === employee.id);
+    if (empEntries.length === 0) continue;
 
-    // Calcul heures semaine (durée prévue des shifts, comme le planning prévu)
-    const weeklyHours = empEntries.reduce((sum, e) => {
-      const shift = shiftMap.get(e.shiftId);
-      return sum + getPlannedEntryDurationHours(e, shift);
-    }, 0);
+    const inWindow = empEntries.filter(
+      (e) => e.date >= window.from && e.date <= window.to
+    );
 
-    const maxHours = employee.contractHours;
-    if (maxHours > 0 && weeklyHours > maxHours) {
+    // ---- Heures hebdomadaires, semaine par semaine ----
+    // On repart du lundi de chaque semaine touchée par la plage, puis on
+    // additionne TOUTES les entrées de cette semaine, même celles qui
+    // tombent en dehors de la plage : sinon une semaine à cheval sur les
+    // bornes paraîtrait plus courte qu'elle ne l'est.
+    const weekStarts = new Set(inWindow.map((e) => mondayOf(e.date)));
+    for (const weekStart of weekStarts) {
+      const weekEnd = format(addDays(parseISO(weekStart), 6), 'yyyy-MM-dd');
+      const weeklyHours = empEntries
+        .filter((e) => e.date >= weekStart && e.date <= weekEnd)
+        .reduce(
+          (sum, e) => sum + getPlannedEntryDurationHours(e, shiftMap.get(e.shiftId)),
+          0
+        );
+
+      const overLegal = legalWeeklyMax > 0 && weeklyHours > legalWeeklyMax;
+      const overContract = employee.contractHours > 0 && weeklyHours > employee.contractHours;
+
+      if (overLegal || overContract) {
+        alerts.push({
+          id: `alert-overtime-${employee.id}-${weekStart}`,
+          type: 'overtime',
+          severity: overLegal ? 'error' : 'warning',
+          message: overLegal
+            ? `${employee.firstName} ${employee.lastName} : ${formatHours(weeklyHours)} planifiées sur la semaine du ${formatDate(weekStart)} — au-delà du plafond légal de ${legalWeeklyMax} h`
+            : `${employee.firstName} ${employee.lastName} : ${formatHours(weeklyHours)} planifiées sur la semaine du ${formatDate(weekStart)} — au-delà de son contrat de ${employee.contractHours} h`,
+          employeeId: employee.id,
+          date: weekStart,
+          resolved: false,
+        });
+      }
+    }
+
+    // ---- Jour habituellement non disponible ----
+    for (const entry of inWindow) {
+      if (!isWorkEntry(entry)) continue;
+      const dayName = DAY_NAMES[parseISO(entry.date).getDay()];
+      if (!dayName) continue;
+      if (employee.availability.includes(dayName as never)) continue;
+
       alerts.push({
-        id: `alert-overtime-${empId}-${weekStart}`,
-        type: 'overtime',
-        severity: 'error',
-        message: `${employee.firstName} ${employee.lastName} a ${formatHours(weeklyHours)} planifiées cette semaine (max ${maxHours}h)`,
-        employeeId: empId,
-        date: weekStart,
+        id: `alert-unavailable-${employee.id}-${entry.date}`,
+        type: 'unavailable',
+        severity: 'warning',
+        message: `${employee.firstName} ${employee.lastName} est planifié(e) le ${formatDate(entry.date)} mais n'est pas disponible ce jour`,
+        employeeId: employee.id,
+        date: entry.date,
         resolved: false,
       });
     }
 
-    // Vérifier disponibilité
-    const dayNames: Record<number, string> = {
-      0: 'sunday', 1: 'monday', 2: 'tuesday', 3: 'wednesday',
-      4: 'thursday', 5: 'friday', 6: 'saturday',
-    };
+    // ---- Repos entre deux services ----
+    const workEntries = empEntries
+      .filter(isWorkEntry)
+      .map((entry) => {
+        const shift = shiftMap.get(entry.shiftId);
+        const { start, end } = getEntryDisplayTimeRange(entry, shift);
+        return {
+          entry,
+          startAt: getShiftStartDateTime(entry.date, start),
+          endAt: getShiftEndDateTime(entry.date, start, end),
+        };
+      })
+      .sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
 
-    empEntries.forEach((entry) => {
-      const date = parseISO(entry.date);
-      const dayName = dayNames[date.getDay()] as string;
-      const shift = shiftMap.get(entry.shiftId);
+    for (let i = 0; i < workEntries.length - 1; i += 1) {
+      const current = workEntries[i]!;
+      const next = workEntries[i + 1]!;
+      // On n'alerte que si le service suivant est dans la plage surveillée.
+      if (next.entry.date < window.from || next.entry.date > window.to) continue;
 
-      if (shift && shift.type === 'work' && !employee.availability.includes(dayName as any)) {
-        alerts.push({
-          id: `alert-unavailable-${empId}-${entry.date}`,
-          type: 'unavailable',
-          severity: 'warning',
-          message: `${employee.firstName} ${employee.lastName} est planifié(e) le ${formatDate(entry.date)} mais n'est pas disponible ce jour`,
-          employeeId: empId,
-          date: entry.date,
-          resolved: false,
-        });
-      }
-    });
+      const restHours = differenceInMinutes(next.startAt, current.endAt) / 60;
+      if (restHours >= minRestHours) continue;
 
-    // Vérifier repos entre shifts consécutifs
-    const sortedEntries = [...empEntries].sort((a, b) => a.date.localeCompare(b.date));
-    for (let i = 0; i < sortedEntries.length - 1; i++) {
-      const curr = sortedEntries[i];
-      const next = sortedEntries[i + 1];
-      const currShift = shiftMap.get(curr.shiftId);
-      const nextShift = shiftMap.get(next.shiftId);
-
-      if (currShift?.type === 'work' && nextShift?.type === 'work') {
-        const currEnd = currShift.endTime === '00:00' ? '24:00' : currShift.endTime;
-        const restHours = 24 - parseInt(currEnd.split(':')[0]) + parseInt(nextShift.startTime.split(':')[0]);
-        if (restHours < 11) {
-          alerts.push({
-            id: `alert-rest-${empId}-${next.date}`,
-            type: 'rest',
-            severity: 'warning',
-            message: `${employee.firstName} ${employee.lastName} a moins de 11h de repos entre le ${formatDate(curr.date)} et le ${formatDate(next.date)}`,
-            employeeId: empId,
-            date: next.date,
-            resolved: false,
-          });
-        }
-      }
+      alerts.push({
+        id: `alert-rest-${employee.id}-${next.entry.date}`,
+        type: 'rest',
+        severity: 'warning',
+        message: `${employee.firstName} ${employee.lastName} n'a que ${formatHours(Math.max(restHours, 0))} de repos entre le ${formatDate(current.entry.date)} et le ${formatDate(next.entry.date)} (minimum ${minRestHours} h)`,
+        employeeId: employee.id,
+        date: next.entry.date,
+        resolved: false,
+      });
     }
-  });
+  }
 
   return alerts;
+}
+
+/**
+ * Journées validées dont la pause enregistrée est en dessous du minimum
+ * légal. Les journées sans pause renseignée (validations antérieures à la
+ * mise en place des minutes) sont ignorées : on ne devine pas.
+ */
+export function detectShortBreakAlerts(
+  entries: ScheduleEntry[],
+  employees: Employee[],
+  window: AlertWindow
+): PlanningAlert[] {
+  const empMap = new Map(employees.map((e) => [e.id, e]));
+  const alerts: PlanningAlert[] = [];
+
+  for (const entry of entries) {
+    if (entry.date < window.from || entry.date > window.to) continue;
+    if (entry.validatedBreakMinutes == null) continue;
+
+    const grossHours = getValidatedEntryGrossHours(entry);
+    if (grossHours === 0) continue;
+    if (!isBreakBelowLegal(grossHours, entry.validatedBreakMinutes)) continue;
+
+    const employee = empMap.get(entry.employeeId);
+    if (!employee || !employee.isActive) continue;
+
+    alerts.push({
+      id: `alert-shortbreak-${entry.employeeId}-${entry.date}`,
+      type: 'short_break',
+      severity: 'warning',
+      message: `${employee.firstName} ${employee.lastName} : ${formatHours(grossHours)} travaillées le ${formatDate(entry.date)} avec seulement ${entry.validatedBreakMinutes} min de pause (minimum légal ${legalBreakMinutes(grossHours)} min)`,
+      employeeId: entry.employeeId,
+      date: entry.date,
+      resolved: false,
+    });
+  }
+
+  return alerts;
+}
+
+/** Retire les alertes dont la catégorie est désactivée dans les réglages. */
+export function filterAlertsByNotifications(
+  alerts: PlanningAlert[],
+  notifications: NotificationSettings | undefined
+): PlanningAlert[] {
+  if (!notifications) return alerts;
+
+  const enabled: Record<PlanningAlert['type'], boolean> = {
+    overtime: notifications.overtime !== false,
+    unavailable: notifications.unavailable !== false,
+    validated_unavailable: notifications.unavailable !== false,
+    rest: notifications.lowRest !== false,
+    geofence_clock_in: notifications.geofencePunch !== false,
+    geofence_clock_out: notifications.geofencePunch !== false,
+    missing_punch: notifications.missingPunch !== false,
+    short_break: notifications.shortBreak !== false,
+    // Catégories sans réglage dédié : toujours affichées.
+    conflict: true,
+    understaffed: true,
+  };
+
+  return alerts.filter((a) => enabled[a.type] !== false);
 }
 
 /**
@@ -375,17 +502,37 @@ export function applyResolvedPlanningAlerts(
   );
 }
 
-/** Alertes hebdo + conflits dispo / mois validé (charge initiale et refresh). */
+/** Jours passés surveillés par les alertes (pointages manquants, pauses trop courtes). */
+export const ALERT_WINDOW_PAST_DAYS = 21;
+/** Jours à venir surveillés par les alertes (planning déjà saisi). */
+export const ALERT_WINDOW_FUTURE_DAYS = 60;
+
+/** Plage surveillée par les alertes autour d’une date de référence. */
+export function getAlertWindow(referenceDate: Date): AlertWindow {
+  return {
+    from: format(subDays(referenceDate, ALERT_WINDOW_PAST_DAYS), 'yyyy-MM-dd'),
+    to: format(addDays(referenceDate, ALERT_WINDOW_FUTURE_DAYS), 'yyyy-MM-dd'),
+  };
+}
+
+/** Alertes planning + conflits dispo / mois validé (charge initiale et refresh). */
 export function buildPlanningAlerts(
   employees: Employee[],
   shifts: Shift[],
   scheduleEntries: ScheduleEntry[],
-  weekStart: string,
-  weekEnd: string,
+  window: AlertWindow,
+  settings: AlertSettings,
   availabilityRequests: AvailabilityRequestRow[],
   availabilityValidations: AvailabilityValidationRow[]
 ): PlanningAlert[] {
-  const weekly = detectAlerts(scheduleEntries, employees, shifts, weekStart, weekEnd);
+  const schedule = detectScheduleAlerts(
+    scheduleEntries,
+    employees,
+    shifts,
+    window,
+    settings
+  );
+  const shortBreaks = detectShortBreakAlerts(scheduleEntries, employees, window);
   const validated = detectValidatedAvailabilityConflicts(
     scheduleEntries,
     employees,
@@ -393,7 +540,7 @@ export function buildPlanningAlerts(
     availabilityRequests,
     availabilityValidations
   );
-  return [...weekly, ...validated];
+  return [...schedule, ...shortBreaks, ...validated];
 }
 
 /** Fenêtre minimale (± mois autour d’une date) pour ne pas manquer des dispos hors plage des entrées planning. */
@@ -578,6 +725,12 @@ export function getPlanningAlertNavigationHref(alert: PlanningAlert): string | n
 
   if (alert.type === 'overtime') {
     return `/planning/weekly?${params.toString()}`;
+  }
+
+  // Ces deux alertes concernent une journée déjà travaillée : c'est dans le
+  // planning réel qu'on la corrige.
+  if (alert.type === 'missing_punch' || alert.type === 'short_break') {
+    return `/planning/real/monthly?${params.toString()}`;
   }
 
   return `/planning/monthly?${params.toString()}`;

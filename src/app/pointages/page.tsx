@@ -43,6 +43,14 @@ import {
   syncScheduleFromApproved,
   notifyPointagesReviewUpdated,
 } from '@/lib/timePunches';
+import { calculateShiftDuration, formatHours } from '@/lib/utils';
+import {
+  defaultBreakMinutes,
+  formatBreakMinutes,
+  legalBreakMinutes,
+} from '@/lib/swissBreaks';
+import { BreakMinutesField } from '@/components/planning/BreakMinutesField';
+import { PunchHistory } from '@/components/planning/PunchHistory';
 
 type ReviewTab = 'action' | 'approved' | 'in_progress';
 
@@ -102,6 +110,35 @@ function GeoPunchBadge({
   );
 }
 
+/** Pause enregistrée, signalée en ambre si elle est sous le minimum légal. */
+function PauseBadge({ punch }: { punch: PunchWithEmployee }) {
+  const minutes = defaultBreakMinutes(punch.pause_minutes, punch.pause_15min);
+  const { clockIn, clockOut } = getClockedTimes(punch);
+  const start = punch.actual_start ?? clockIn;
+  const end = punch.actual_end ?? clockOut;
+  const worked = start && end ? calculateShiftDuration(start, end) : 0;
+  const legal = legalBreakMinutes(worked);
+  const tooShort = worked > 0 && minutes < legal;
+
+  return (
+    <span
+      title={
+        legal > 0
+          ? `Minimum légal pour ${formatHours(worked)} de travail : ${legal} min`
+          : 'Aucune pause imposée pour cette durée'
+      }
+      className={`text-[10px] px-2 py-0.5 rounded-md border ${
+        tooShort
+          ? 'bg-amber-50 text-amber-800 border-amber-200'
+          : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+      }`}
+    >
+      Pause {formatBreakMinutes(minutes)}
+      {tooShort ? ` — minimum ${legal} min` : ''}
+    </span>
+  );
+}
+
 function GeoSummary({ punch }: { punch: PunchWithEmployee }) {
   const hasOut = Boolean(punch.clock_out_at);
 
@@ -135,7 +172,7 @@ function ValidateEditDialog({
   const [endMode, setEndMode] = useState<ApprovedTimeMode>('actual');
   const [overrideStart, setOverrideStart] = useState('');
   const [overrideEnd, setOverrideEnd] = useState('');
-  const [pause15min, setPause15min] = useState(true);
+  const [pauseMinutes, setPauseMinutes] = useState(0);
   const [hadSnack, setHadSnack] = useState(false);
   const [ateWorkFood, setAteWorkFood] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -151,7 +188,7 @@ function ValidateEditDialog({
       punch.actual_start ?? clockIn ?? punch.planned_start ?? ''
     );
     setOverrideEnd(punch.actual_end ?? clockOut ?? punch.planned_end ?? '');
-    setPause15min(punch.pause_15min ?? true);
+    setPauseMinutes(defaultBreakMinutes(punch.pause_minutes, punch.pause_15min));
     setHadSnack(punch.had_snack ?? false);
     setAteWorkFood(punch.ate_work_food ?? false);
   }, [punch, open]);
@@ -187,6 +224,8 @@ function ValidateEditDialog({
   });
   const needsManualEnd =
     punch.status === 'in_progress' || punch.status === 'auto_closed';
+  const previewDuration =
+    overrideStart && overrideEnd ? calculateShiftDuration(overrideStart, overrideEnd) : 0;
 
   const handleSave = async () => {
     if (!overrideStart || !overrideEnd) {
@@ -204,7 +243,9 @@ function ValidateEditDialog({
       approved_end_mode: endMode,
       actual_start: preview.start,
       actual_end: preview.end,
-      pause_15min: pause15min,
+      pause_minutes: pauseMinutes,
+      // L'ancienne case reste alignée pour les écrans qui l'affichent encore.
+      pause_15min: pauseMinutes >= 15,
       had_snack: hadSnack,
       ate_work_food: ateWorkFood,
     };
@@ -228,7 +269,8 @@ function ValidateEditDialog({
       punch.employee_id,
       punch.date,
       preview.start,
-      preview.end
+      preview.end,
+      pauseMinutes
     );
     void usePlanningStore.getState().loadData({ silent: true });
     toast.success(
@@ -362,19 +404,15 @@ function ValidateEditDialog({
               />
             </div>
 
-            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-2">
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-3">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
                 Pause &amp; repas
               </p>
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={pause15min}
-                  onChange={(e) => setPause15min(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
-                />
-                <span className="text-sm text-slate-700">Pause 15 min</span>
-              </label>
+              <BreakMinutesField
+                value={pauseMinutes}
+                onChange={setPauseMinutes}
+                workedHours={previewDuration}
+              />
               <label className="flex items-start gap-2.5 cursor-pointer">
                 <input
                   type="checkbox"
@@ -467,9 +505,14 @@ function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRo
     setCancelling(true);
     const supabase = createClient();
     await clearScheduleValidatedIfAny(supabase, punch.employee_id, punch.date);
+    // Archivage plutôt que suppression : un pointage est un justificatif.
+    const { data: userData } = await supabase.auth.getUser();
     const { error } = await supabase
       .from('time_declarations')
-      .delete()
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: userData.user?.id ?? null,
+      })
       .eq('id', punch.id);
     setCancelling(false);
     setCancelOpen(false);
@@ -478,7 +521,7 @@ function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRo
       return;
     }
     void usePlanningStore.getState().loadData({ silent: true });
-    toast.success('Pointage annulé — l’employé peut pointer à nouveau ce jour-là.');
+    toast.success('Pointage annulé et archivé — l’employé peut pointer à nouveau ce jour-là.');
     onRefresh();
   };
 
@@ -514,7 +557,8 @@ function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRo
       punch.employee_id,
       punch.date,
       times.start,
-      times.end
+      times.end,
+      defaultBreakMinutes(punch.pause_minutes, punch.pause_15min)
     );
     void usePlanningStore.getState().loadData({ silent: true });
     toast.success('Pointage validé — planning mis à jour');
@@ -594,15 +638,7 @@ function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRo
       {expandable && expanded && (
         <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
           <div className="flex flex-wrap gap-1.5">
-            {(punch.pause_15min ?? true) ? (
-              <span className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200">
-                Pause 15 min
-              </span>
-            ) : (
-              <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
-                Pas de pause 15 min
-              </span>
-            )}
+            <PauseBadge punch={punch} />
             {punch.had_snack && (
               <span className="text-[10px] px-2 py-0.5 rounded-md bg-white border border-slate-200">
                 Collation
@@ -626,6 +662,10 @@ function PunchRow({ punch, onRefresh, onModifyClick, readOnly = false }: PunchRo
               Note admin : {punch.admin_note}
             </p>
           )}
+
+          <div className="rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2">
+            <PunchHistory punchId={punch.id} />
+          </div>
 
           {showActions && (
             <div className="flex flex-wrap gap-2">
@@ -733,20 +773,24 @@ export default function PointagesAdminPage() {
     const selectQuery = `
         id, employee_id, date, planned_start, planned_end,
          clock_in_at, clock_out_at, actual_start, actual_end,
-         status, pause_15min, had_snack, ate_work_food, auto_closed,
+         status, pause_15min, pause_minutes, had_snack, ate_work_food, auto_closed,
          admin_note, approved_start_mode, approved_end_mode, reviewed_at, note,
          clock_in_inside_geofence, clock_out_inside_geofence,
          employees ( first_name, last_name, color )`;
 
+    // `deleted_at is null` : les pointages archivés restent en base mais ne
+    // doivent plus apparaître dans les listes de travail.
     const [{ data: priorityData }, { data: approvedData }] = await Promise.all([
       supabase
         .from('time_declarations')
         .select(selectQuery)
+        .is('deleted_at', null)
         .in('status', ADMIN_PRIORITY_PUNCH_STATUSES)
         .order('date', { ascending: false }),
       supabase
         .from('time_declarations')
         .select(selectQuery)
+        .is('deleted_at', null)
         .eq('status', 'approved')
         .order('date', { ascending: false })
         .limit(200),

@@ -2,6 +2,7 @@
 
 import { Coffee, PauseCircle, UtensilsCrossed } from 'lucide-react';
 import type { CellDeclarationFlags } from '@/lib/usePeriodDeclarations';
+import { formatBreakMinutes } from '@/lib/swissBreaks';
 
 interface ValidatedShiftDeclarationIconsProps {
   flags?: CellDeclarationFlags | null;
@@ -19,7 +20,7 @@ export function ValidatedShiftDeclarationIcons({
 }: ValidatedShiftDeclarationIconsProps) {
   if (!flags) return null;
 
-  const showPause = flags.pause_15min;
+  const showPause = flags.pause_minutes > 0;
   const showSnack = flags.had_snack;
   const showMeal = flags.ate_work_food;
 
@@ -33,7 +34,10 @@ export function ValidatedShiftDeclarationIcons({
       aria-label="Options fin de service"
     >
       {showPause && (
-        <span title="Pause 15 min" style={{ color: textColor }}>
+        <span
+          title={`Pause ${formatBreakMinutes(flags.pause_minutes)}`}
+          style={{ color: textColor }}
+        >
           <PauseCircle className={iconClass} strokeWidth={2.5} />
         </span>
       )}
