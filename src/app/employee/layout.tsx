@@ -18,13 +18,6 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
   const [employeeId, setEmployeeId] = useState<string | null>(null);
   const [showGeoOnboarding, setShowGeoOnboarding] = useState(false);
 
-  // Enregistrement du Service Worker pour la PWA
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
-  }, []);
-
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getUser().then(async ({ data }) => {

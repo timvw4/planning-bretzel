@@ -1,7 +1,8 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -27,8 +28,15 @@ export const metadata: Metadata = {
       { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
       { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
     ],
-    shortcut: '/icon-512.png',
+    shortcut: '/icon-192.png',
   },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  themeColor: '#4F46E5',
 };
 
 export default function RootLayout({
@@ -47,9 +55,10 @@ export default function RootLayout({
         <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
         <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
-        <link rel="shortcut icon" href="/icon-512.png" />
+        <link rel="shortcut icon" href="/icon-192.png" />
       </head>
       <body className="font-sans antialiased bg-slate-50 text-slate-900">
+        <ServiceWorkerRegister />
         <AppLayout>{children}</AppLayout>
       </body>
     </html>
