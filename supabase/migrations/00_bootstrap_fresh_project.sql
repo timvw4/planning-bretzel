@@ -505,6 +505,45 @@ create policy resolved_planning_alerts_admin_all on resolved_planning_alerts
   using (is_admin()) with check (is_admin());
 
 -- ============================================================
+-- PLANNING DE L'ÉQUIPE VISIBLE PAR LES EMPLOYÉS
+-- ============================================================
+-- Les règles de sécurité filtrent des lignes, pas des colonnes : ouvrir
+-- la table `employees` aux employés leur donnerait aussi le téléphone,
+-- l'email et les notes privées de leurs collègues. Cette vue n'expose
+-- que le prénom, la couleur et l'horaire prévu, pour les journées de
+-- travail déjà publiées d'employés actifs.
+
+drop view if exists team_planning;
+
+create view team_planning as
+select
+  se.date                              as date,
+  se.employee_id                       as employee_id,
+  e.first_name                         as first_name,
+  left(coalesce(e.last_name, ''), 1)   as last_name_initial,
+  e.color                              as employee_color,
+  s.short_name                         as shift_short_name,
+  s.start_time                         as start_time,
+  s.end_time                           as end_time
+from schedule_entries se
+join employees e on e.id = se.employee_id
+join shifts s on s.id = se.shift_id
+where se.visible_to_employee = true
+  and coalesce(e.is_active, true) = true
+  and s.type = 'work';
+
+-- La vue traverse les verrous des tables : il faut donc la réserver aux
+-- comptes connectés. `anon` = visiteur sans mot de passe.
+revoke all on team_planning from anon;
+revoke all on team_planning from public;
+grant select on team_planning to authenticated;
+
+create index if not exists schedule_entries_date_visible_idx
+  on schedule_entries (date)
+  where visible_to_employee = true;
+
+
+-- ============================================================
 -- DONNÉES INITIALES
 -- ============================================================
 

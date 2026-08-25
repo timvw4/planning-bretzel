@@ -12,6 +12,31 @@ export function resolveAvailabilityDisplayStatus(
   return normalizeStoredAvailabilityStatus(status) ?? null;
 }
 
+/**
+ * Couleurs des exceptions de disponibilité, partagées par tous les écrans :
+ * l'employé doit reconnaître au premier coup d'œil, dans son planning, la
+ * même pastille que celle qu'il a posée dans ses disponibilités.
+ */
+export const AVAILABILITY_EXCEPTION_STYLE: Record<
+  StoredAvailabilityStatus,
+  { label: string; shortLabel: string; bg: string; text: string; border: string }
+> = {
+  vacation: {
+    label: 'Vacances',
+    shortLabel: 'Vac.',
+    bg: '#FEF3C7',
+    text: '#D97706',
+    border: '#FCD34D',
+  },
+  unavailable: {
+    label: 'Indisponible',
+    shortLabel: 'Indispo',
+    bg: '#FEE2E2',
+    text: '#DC2626',
+    border: '#FCA5A5',
+  },
+};
+
 /** Infos d’affichage (titre, couleur) pour le planning admin — exceptions uniquement. */
 export function availabilityStatusMeta(status: string | undefined | null): {
   title: string;

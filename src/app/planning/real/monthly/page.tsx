@@ -254,7 +254,7 @@ export default function RealMonthlyPlanningPage() {
               <DropdownMenuLabel>Récapitulatif comptable</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => void handleExportPayrollExcel()}>
                 <span className="flex flex-col items-start">
-                  <span>Excel (recommandé)</span>
+                  <span>Excel</span>
                   <span className="text-[11px] text-slate-500">
                     Totaux + journal détaillé
                   </span>

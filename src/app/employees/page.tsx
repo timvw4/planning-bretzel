@@ -344,7 +344,9 @@ export default function EmployeesPage() {
                           {getContractLabel(emp.contractType)} · {emp.contractHours}h/sem
                           {emp.contractType === 'fixed' && (
                             <span className="text-slate-400">
-                              {' '}· {emp.annualVacationDays} j vacances/an
+                              {emp.annualVacationDays > 0
+                                ? ` · ${emp.annualVacationDays} j vacances/an`
+                                : ' · vacances hors application'}
                             </span>
                           )}
                         </p>

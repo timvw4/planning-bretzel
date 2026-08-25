@@ -15,7 +15,10 @@ import { Header } from '@/components/layout/Header';
 import toast from 'react-hot-toast';
 import type { AvailabilityDay } from '@/lib/types';
 import { formatWorkDaysSummary, isEmployeeWorkDay, normalizeStoredAvailabilityStatus } from '@/lib/employeePosition';
-import { AvailabilityStatusIcon } from '@/components/availability/AvailabilityStatusIcon';
+import {
+  AVAILABILITY_EXCEPTION_STYLE,
+  AvailabilityStatusIcon,
+} from '@/components/availability/AvailabilityStatusIcon';
 
 /** Seuls les changements par rapport au défaut employé sont enregistrés en base. */
 type StoredAvailabilityStatus = 'vacation' | 'unavailable';
@@ -45,13 +48,7 @@ interface UnlockRequest {
   requestedAt: string;
 }
 
-const EXCEPTION_CONFIG: Record<
-  StoredAvailabilityStatus,
-  { bg: string; text: string; label: string }
-> = {
-  vacation: { bg: '#FEF3C7', text: '#D97706', label: 'Vacances' },
-  unavailable: { bg: '#FEE2E2', text: '#DC2626', label: 'Indisponible' },
-};
+const EXCEPTION_CONFIG = AVAILABILITY_EXCEPTION_STYLE;
 
 export default function AvailabilityAdminPage() {
   const [currentDate, setCurrentDate] = useState(new Date());

@@ -15,9 +15,17 @@ import {
   endOfWeek,
 } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { ChevronLeft, ChevronRight, Clock, Sun, Info } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, Clock, Sun, Info, Users } from 'lucide-react';
 import { getNextUpcomingWorkEntry, calculateShiftDuration, formatHours } from '@/lib/utils';
 import { netWorkedHours } from '@/lib/swissBreaks';
+import {
+  normalizeStoredAvailabilityStatus,
+  type StoredAvailabilityStatus,
+} from '@/lib/employeePosition';
+import {
+  AVAILABILITY_EXCEPTION_STYLE,
+  AvailabilityStatusIcon,
+} from '@/components/availability/AvailabilityStatusIcon';
 
 interface Shift {
   id: string;
@@ -38,6 +46,22 @@ interface ScheduleEntry {
   /** Pause retenue sur la journée validée, en minutes. */
   breakMinutes: number;
   shift: Shift;
+}
+
+/**
+ * Ligne du planning d'équipe. Vient de la vue `team_planning`, qui
+ * n'expose que le prénom, la couleur et l'horaire prévu : ni téléphone,
+ * ni email, ni heures réellement pointées.
+ */
+interface TeamShift {
+  date: string;
+  employeeId: string;
+  firstName: string;
+  lastNameInitial: string;
+  employeeColor: string;
+  shiftShortName: string;
+  startTime: string;
+  endTime: string;
 }
 
 const WEEK_DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
@@ -99,6 +123,13 @@ export default function EmployeeSchedulePage() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<CalendarView>('month');
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
+  /** Vacances et indisponibilités que l'employé a lui-même déclarées. */
+  const [exceptions, setExceptions] = useState<Map<string, StoredAvailabilityStatus>>(new Map());
+  const [teamOpen, setTeamOpen] = useState(false);
+  const [teamShifts, setTeamShifts] = useState<TeamShift[]>([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  /** Message affiché si la vue d'équipe n'est pas disponible en base. */
+  const [teamError, setTeamError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);       // squelette initial uniquement
   const [isFetching, setIsFetching] = useState(false); // assombrissement pendant navigation
   const [employeeId, setEmployeeId] = useState<string | null>(null);
@@ -184,6 +215,21 @@ export default function EmployeeSchedulePage() {
       }));
     }
 
+    // Ses propres exceptions de disponibilité, pour les rappeler dans les cases.
+    const { data: availRows } = await supabase
+      .from('availability_requests')
+      .select('date, status')
+      .eq('employee_id', employeeId)
+      .gte('date', start)
+      .lte('date', end);
+
+    const exceptionMap = new Map<string, StoredAvailabilityStatus>();
+    for (const row of availRows ?? []) {
+      const status = normalizeStoredAvailabilityStatus(row.status);
+      if (status) exceptionMap.set(row.date, status);
+    }
+    setExceptions(exceptionMap);
+
     const { data: settingsRow } = await supabase
       .from('app_settings')
       .select('deduct_breaks')
@@ -208,6 +254,63 @@ export default function EmployeeSchedulePage() {
   }, [employeeId, currentDate]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Planning de l'équipe : chargé seulement si la section est ouverte,
+  // et rechargé quand on change de semaine.
+  useEffect(() => {
+    if (!teamOpen) return;
+    let cancelled = false;
+    const from = format(startOfWeek(currentDate, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+    const to = format(endOfWeek(currentDate, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+
+    async function loadTeam() {
+      setTeamLoading(true);
+      setTeamError(null);
+
+      const { data, error } = await createClient()
+        .from('team_planning')
+        .select(
+          'date, employee_id, first_name, last_name_initial, employee_color, shift_short_name, start_time, end_time'
+        )
+        .gte('date', from)
+        .lte('date', to)
+        .order('date')
+        .order('start_time');
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error('Planning de l’équipe :', error);
+        setTeamShifts([]);
+        setTeamError(
+          // Vue absente de la base, ou droits de lecture non accordés.
+          ['42P01', 'PGRST205', '42501'].includes(error.code ?? '')
+            ? 'Le planning de l’équipe n’est pas encore activé. Signalez-le à votre responsable.'
+            : 'Impossible de charger le planning de l’équipe pour le moment.'
+        );
+      } else {
+        setTeamShifts(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (data ?? []).map((row: any) => ({
+            date: row.date,
+            employeeId: row.employee_id,
+            firstName: row.first_name ?? '',
+            lastNameInitial: row.last_name_initial ?? '',
+            employeeColor: row.employee_color ?? '#94A3B8',
+            shiftShortName: row.shift_short_name ?? '',
+            startTime: row.start_time ?? '',
+            endTime: row.end_time ?? '',
+          }))
+        );
+      }
+      setTeamLoading(false);
+    }
+
+    void loadTeam();
+    return () => {
+      cancelled = true;
+    };
+  }, [teamOpen, currentDate]);
 
   // Horloge pour le bandeau "prochain shift"
   useEffect(() => {
@@ -279,6 +382,36 @@ export default function EmployeeSchedulePage() {
   );
   const workedDays = entriesForStats.filter((e) => e.shift.type === 'work').length;
   const offDays = entriesForStats.filter((e) => e.shift.type === 'off').length;
+
+  // Un prénom seul suffit d'habitude ; on ajoute l'initiale du nom
+  // uniquement si deux collègues de la semaine portent le même prénom.
+  const duplicatedFirstNames = new Set(
+    teamShifts
+      .map((t) => t.firstName.toLowerCase())
+      .filter((name, i, all) => all.indexOf(name) !== i)
+  );
+  const teamLabel = (shift: TeamShift) =>
+    duplicatedFirstNames.has(shift.firstName.toLowerCase()) && shift.lastNameInitial
+      ? `${shift.firstName} ${shift.lastNameInitial}.`
+      : shift.firstName;
+
+  const teamByDate = new Map<string, TeamShift[]>();
+  for (const shift of teamShifts) {
+    const list = teamByDate.get(shift.date);
+    if (list) list.push(shift);
+    else teamByDate.set(shift.date, [shift]);
+  }
+
+  // Légende affichée seulement si la période visible contient des exceptions.
+  const periodStart = viewMode === 'week' ? weekStartStr : monthStartStr;
+  const periodEnd = viewMode === 'week' ? weekEndStr : monthEndStr;
+  const visibleExceptionStatuses = (
+    Object.keys(AVAILABILITY_EXCEPTION_STYLE) as StoredAvailabilityStatus[]
+  ).filter((status) =>
+    [...exceptions.entries()].some(
+      ([date, value]) => value === status && date >= periodStart && date <= periodEnd
+    )
+  );
 
   // ── Squelettes pendant le chargement ────────────────────────
   if (loading) {
@@ -458,6 +591,8 @@ export default function EmployeeSchedulePage() {
               const entry = entryMap.get(dateStr);
               const isCurrentDay = isToday(day);
               const isWeekend = getDay(day) === 0 || getDay(day) === 6;
+              const exception = exceptions.get(dateStr) ?? null;
+              const exceptionStyle = exception ? AVAILABILITY_EXCEPTION_STYLE[exception] : null;
               const shift = entry?.shift;
               const showWorkTimesOnly =
                 shift &&
@@ -470,20 +605,37 @@ export default function EmployeeSchedulePage() {
                 <div
                   key={dateStr}
                   className={`h-20 border-b border-r border-slate-100 p-1.5 flex flex-col ${
-                    isWeekend ? 'bg-slate-50/50' : ''
+                    isWeekend && !exceptionStyle ? 'bg-slate-50/50' : ''
                   }`}
+                  style={
+                    exceptionStyle ? { backgroundColor: exceptionStyle.bg + '99' } : undefined
+                  }
+                  title={exceptionStyle ? `Vous avez déclaré : ${exceptionStyle.label}` : undefined}
                 >
-                  <span
-                    className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full mb-1 shrink-0 ${
-                      isCurrentDay
-                        ? 'bg-indigo-600 text-white'
-                        : isWeekend
-                          ? 'text-slate-400'
-                          : 'text-slate-600'
-                    }`}
-                  >
-                    {format(day, 'd')}
-                  </span>
+                  <div className="flex items-center justify-between gap-0.5 mb-1 shrink-0">
+                    <span
+                      className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full shrink-0 ${
+                        isCurrentDay
+                          ? 'bg-indigo-600 text-white'
+                          : isWeekend
+                            ? 'text-slate-400'
+                            : 'text-slate-600'
+                      }`}
+                    >
+                      {format(day, 'd')}
+                    </span>
+                    {exception && exceptionStyle && (
+                      <span
+                        className="w-4 h-4 rounded-full flex items-center justify-center shrink-0"
+                        style={{
+                          backgroundColor: exceptionStyle.text + '22',
+                          color: exceptionStyle.text,
+                        }}
+                      >
+                        <AvailabilityStatusIcon status={exception} size={9} strokeWidth={3} />
+                      </span>
+                    )}
+                  </div>
 
                   {entry && (
                     <div
@@ -516,6 +668,8 @@ export default function EmployeeSchedulePage() {
               const entry = entryMap.get(dateStr);
               const isCurrentDay = isToday(day);
               const isWeekend = getDay(day) === 0 || getDay(day) === 6;
+              const exception = exceptions.get(dateStr) ?? null;
+              const exceptionStyle = exception ? AVAILABILITY_EXCEPTION_STYLE[exception] : null;
               const shift = entry?.shift;
               const showWorkTimesOnly =
                 shift &&
@@ -528,20 +682,40 @@ export default function EmployeeSchedulePage() {
                 <div
                   key={dateStr}
                   className={`min-h-[120px] sm:min-h-[140px] border-b border-r border-slate-100 p-2 flex flex-col ${
-                    isWeekend ? 'bg-slate-50/50' : ''
+                    isWeekend && !exceptionStyle ? 'bg-slate-50/50' : ''
                   }`}
+                  style={
+                    exceptionStyle ? { backgroundColor: exceptionStyle.bg + '99' } : undefined
+                  }
                 >
-                  <span
-                    className={`text-xs font-bold w-7 h-7 flex items-center justify-center rounded-full mb-2 shrink-0 ${
-                      isCurrentDay
-                        ? 'bg-indigo-600 text-white'
-                        : isWeekend
-                          ? 'text-slate-400'
-                          : 'text-slate-600'
-                    }`}
-                  >
-                    {format(day, 'd')}
-                  </span>
+                  <div className="flex flex-col items-center gap-1 mb-2 shrink-0">
+                    <span
+                      className={`text-xs font-bold w-7 h-7 flex items-center justify-center rounded-full ${
+                        isCurrentDay
+                          ? 'bg-indigo-600 text-white'
+                          : isWeekend
+                            ? 'text-slate-400'
+                            : 'text-slate-600'
+                      }`}
+                    >
+                      {format(day, 'd')}
+                    </span>
+                    {exception && exceptionStyle && (
+                      <span
+                        className="flex items-center gap-0.5 rounded-full px-1.5 py-0.5 max-w-full"
+                        style={{
+                          backgroundColor: exceptionStyle.text + '1f',
+                          color: exceptionStyle.text,
+                        }}
+                        title={`Vous avez déclaré : ${exceptionStyle.label}`}
+                      >
+                        <AvailabilityStatusIcon status={exception} size={9} strokeWidth={3} />
+                        <span className="text-[9px] font-bold truncate">
+                          {exceptionStyle.shortLabel}
+                        </span>
+                      </span>
+                    )}
+                  </div>
 
                   {entry && (
                     <div
@@ -560,6 +734,131 @@ export default function EmployeeSchedulePage() {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {visibleExceptionStatuses.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 border-t border-slate-100 px-4 py-2.5">
+            {visibleExceptionStatuses.map((status) => {
+              const style = AVAILABILITY_EXCEPTION_STYLE[status];
+              return (
+                <span key={status} className="flex items-center gap-1.5">
+                  <span
+                    className="w-5 h-5 rounded-md flex items-center justify-center"
+                    style={{ backgroundColor: style.bg, color: style.text }}
+                  >
+                    <AvailabilityStatusIcon status={status} size={11} strokeWidth={2.5} />
+                  </span>
+                  <span className="text-[11px] text-slate-500">{style.label}</span>
+                </span>
+              );
+            })}
+            <span className="text-[10px] text-slate-400">
+              — ce que vous avez déclaré dans « Mes disponibilités »
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Planning de l'équipe — replié par défaut */}
+      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden animate-stagger-3">
+        <button
+          type="button"
+          onClick={() => setTeamOpen((o) => !o)}
+          aria-expanded={teamOpen}
+          className="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-slate-50 transition-colors"
+        >
+          <span className="flex items-center gap-2.5 min-w-0">
+            <span className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+              <Users className="w-4 h-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-bold text-slate-800">
+                Planning de l&apos;équipe
+              </span>
+              <span className="block text-[11px] text-slate-400 truncate">
+                Semaine du {format(weekStart, 'd MMM', { locale: fr })} au{' '}
+                {format(weekEnd, 'd MMM', { locale: fr })}
+              </span>
+            </span>
+          </span>
+          <ChevronDown
+            className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${
+              teamOpen ? 'rotate-180' : ''
+            }`}
+          />
+        </button>
+
+        {teamOpen && (
+          <div className="border-t border-slate-100">
+            {teamLoading ? (
+              <div className="px-4 py-3 space-y-2.5">
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className="h-5 rounded-full animate-shimmer" />
+                ))}
+              </div>
+            ) : teamError ? (
+              <p className="px-4 py-4 text-xs text-amber-700 leading-relaxed">{teamError}</p>
+            ) : (
+              <div className="divide-y divide-slate-50">
+                {weekDays.map((day) => {
+                  const dateStr = format(day, 'yyyy-MM-dd');
+                  const dayShifts = teamByDate.get(dateStr) ?? [];
+                  return (
+                    <div
+                      key={dateStr}
+                      className={`flex gap-3 px-4 py-2.5 ${
+                        isToday(day) ? 'bg-indigo-50/40' : ''
+                      }`}
+                    >
+                      <p className="w-12 shrink-0 text-[11px] font-bold text-slate-600 capitalize pt-0.5">
+                        {format(day, 'EEE d', { locale: fr })}
+                      </p>
+                      <div className="flex-1 min-w-0 flex flex-wrap gap-1.5">
+                        {dayShifts.length === 0 ? (
+                          <span className="text-[11px] text-slate-300 pt-0.5">
+                            Personne de planifié
+                          </span>
+                        ) : (
+                          dayShifts.map((shift) => {
+                            const isMe = shift.employeeId === employeeId;
+                            const hasTimes = Boolean(shift.startTime && shift.endTime);
+                            return (
+                              <span
+                                key={shift.employeeId + shift.date}
+                                className={`inline-flex items-center gap-1.5 rounded-full border pl-1.5 pr-2 py-0.5 ${
+                                  isMe
+                                    ? 'border-indigo-200 bg-indigo-50'
+                                    : 'border-slate-100 bg-slate-50'
+                                }`}
+                              >
+                                <span
+                                  className="w-2 h-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: shift.employeeColor }}
+                                  aria-hidden
+                                />
+                                <span
+                                  className={`text-[11px] font-semibold ${
+                                    isMe ? 'text-indigo-700' : 'text-slate-700'
+                                  }`}
+                                >
+                                  {isMe ? 'Vous' : teamLabel(shift)}
+                                </span>
+                                <span className="text-[10px] text-slate-400 tabular-nums">
+                                  {hasTimes
+                                    ? `${shift.startTime}–${shift.endTime}`
+                                    : shift.shiftShortName}
+                                </span>
+                              </span>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

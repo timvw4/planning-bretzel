@@ -5,6 +5,7 @@ import { Employee, AvailabilityDay, ContractType, EmployeePosition } from '@/lib
 import {
   EMPLOYEE_POSITIONS,
   POSITION_RULES,
+  countAnnualVacationDays,
 } from '@/lib/employeePosition';
 import {
   Dialog,
@@ -18,7 +19,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ToggleRow } from '@/components/ui/toggle-row';
 import { EMPLOYEE_COLORS, DAY_NAMES_FR, CONTRACT_LABELS } from '@/lib/utils';
+import { createClient } from '@/lib/supabase/client';
 import {
   getDefaultContractHours,
   getMaxContractHours,
@@ -40,6 +43,9 @@ const AVAILABILITY_DAYS: AvailabilityDay[] = [
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
 ];
 
+/** Quota proposé par défaut : 5 semaines, l'usage courant en boulangerie. */
+const DEFAULT_VACATION_DAYS = 25;
+
 const defaultForm: Omit<Employee, 'id' | 'createdAt'> = {
   firstName: '',
   lastName: '',
@@ -50,31 +56,92 @@ const defaultForm: Omit<Employee, 'id' | 'createdAt'> = {
   availability: POSITION_RULES.vente.defaultAvailability,
   contractType: 'fixed',
   contractHours: POSITION_RULES.vente.defaultContractHours,
-  annualVacationDays: 25,
+  annualVacationDays: DEFAULT_VACATION_DAYS,
   notes: '',
   isActive: true,
   inactiveMonths: [],
 };
 
+/** Repères légaux suisses (art. 329a CO), affichés à titre indicatif. */
+const LEGAL_VACATION_DAYS_ADULT = 20;
+const LEGAL_VACATION_DAYS_YOUNG = 25;
+
 export function EmployeeModal({ open, onClose, onSave, employee, usedColors = [] }: EmployeeModalProps) {
   const [form, setForm] = useState(defaultForm);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  /**
+   * L'absence de vacances est stockée comme « 0 jour autorisé » : pas de
+   * réglage séparé en base, donc aucun risque de contradiction entre un
+   * interrupteur allumé et un quota vide.
+   */
+  const [vacationEnabled, setVacationEnabled] = useState(true);
+  /** Dernier quota saisi, pour le restituer si l'interrupteur est rallumé. */
+  const [lastVacationDays, setLastVacationDays] = useState(DEFAULT_VACATION_DAYS);
+  /** Jours de vacances déjà posés sur l'année civile en cours. */
+  const [postedVacationDays, setPostedVacationDays] = useState<number | null>(null);
 
   useEffect(() => {
     if (employee) {
       const { id, createdAt, ...rest } = employee;
+      const days = rest.annualVacationDays ?? DEFAULT_VACATION_DAYS;
       setForm({
         ...defaultForm,
         ...rest,
-        annualVacationDays: rest.annualVacationDays ?? 25,
+        annualVacationDays: days,
       });
+      setVacationEnabled(days > 0);
+      setLastVacationDays(days > 0 ? days : DEFAULT_VACATION_DAYS);
     } else {
       // Pour un nouvel employé, sélectionner automatiquement la première couleur non utilisée
       const firstAvailable = EMPLOYEE_COLORS.find((c) => !usedColors.includes(c)) ?? EMPLOYEE_COLORS[0];
       setForm({ ...defaultForm, color: firstAvailable });
+      setVacationEnabled(true);
+      setLastVacationDays(DEFAULT_VACATION_DAYS);
     }
+    setPostedVacationDays(null);
     setErrors({});
   }, [employee, open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Vacances déjà posées cette année : sert à prévenir la direction avant
+  // qu'elle ne coupe l'accès à un employé qui a déjà planifié ses congés.
+  useEffect(() => {
+    if (!open || !employee) return;
+    let cancelled = false;
+
+    async function loadPostedVacations(employeeId: string, workDays: AvailabilityDay[]) {
+      const year = new Date().getFullYear();
+      const { data, error } = await createClient()
+        .from('availability_requests')
+        .select('date, status')
+        .eq('employee_id', employeeId)
+        .eq('status', 'vacation')
+        .gte('date', `${year}-01-01`)
+        .lte('date', `${year}-12-31`);
+
+      if (cancelled) return;
+      if (error) {
+        console.error('Vacances déjà posées :', error);
+        return;
+      }
+      setPostedVacationDays(countAnnualVacationDays(data ?? [], workDays, year));
+    }
+
+    void loadPostedVacations(employee.id, employee.availability);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, employee]);
+
+  const handleVacationEnabledChange = (enabled: boolean) => {
+    setVacationEnabled(enabled);
+    if (enabled) {
+      setForm((p) => ({ ...p, annualVacationDays: lastVacationDays }));
+    } else {
+      if (form.annualVacationDays > 0) setLastVacationDays(form.annualVacationDays);
+      setForm((p) => ({ ...p, annualVacationDays: 0 }));
+    }
+    setErrors((p) => ({ ...p, annualVacationDays: '' }));
+  };
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -89,9 +156,10 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
     if (form.contractHours < minH || form.contractHours > maxH) {
       newErrors.contractHours = `Entre ${minH} et ${maxH} h / semaine (Suisse)`;
     }
-    if (form.contractType === 'fixed') {
-      if (form.annualVacationDays < 0 || form.annualVacationDays > 50) {
-        newErrors.annualVacationDays = 'Entre 0 et 50 jours par an';
+    if (form.contractType === 'fixed' && vacationEnabled) {
+      if (form.annualVacationDays < 1 || form.annualVacationDays > 50) {
+        newErrors.annualVacationDays =
+          'Entre 1 et 50 jours par an, ou éteignez l’interrupteur ci-dessus';
       }
     }
     setErrors(newErrors);
@@ -290,32 +358,57 @@ export function EmployeeModal({ open, onClose, onSave, employee, usedColors = []
           </div>
 
           {form.contractType === 'fixed' && (
-            <div className="space-y-1.5">
-              <Label htmlFor="annualVacationDays">Jours de vacances / an</Label>
-              <Input
-                id="annualVacationDays"
-                type="number"
-                min={0}
-                max={50}
-                value={form.annualVacationDays}
-                onChange={(e) =>
-                  setForm((p) => ({
-                    ...p,
-                    annualVacationDays: Math.min(
-                      50,
-                      Math.max(0, parseInt(e.target.value, 10) || 0)
-                    ),
-                  }))
-                }
-                className={errors.annualVacationDays ? 'border-red-300' : ''}
+            <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3 space-y-3">
+              <ToggleRow
+                label="L'employé pose ses vacances dans l'application"
+                description="Éteint : il ne peut signaler que ses indisponibilités. Ses vacances restent gérées en dehors de l'application."
+                value={vacationEnabled}
+                onChange={handleVacationEnabledChange}
               />
-              {errors.annualVacationDays ? (
-                <p className="text-xs text-red-500">{errors.annualVacationDays}</p>
+
+              {vacationEnabled ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="annualVacationDays">Jours de vacances / an</Label>
+                  <Input
+                    id="annualVacationDays"
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={form.annualVacationDays}
+                    onChange={(e) =>
+                      setForm((p) => ({
+                        ...p,
+                        annualVacationDays: Math.min(
+                          50,
+                          Math.max(0, parseInt(e.target.value, 10) || 0)
+                        ),
+                      }))
+                    }
+                    className={errors.annualVacationDays ? 'border-red-300' : ''}
+                  />
+                  {errors.annualVacationDays ? (
+                    <p className="text-xs text-red-500">{errors.annualVacationDays}</p>
+                  ) : (
+                    <p className="text-[11px] leading-relaxed text-slate-400">
+                      Quota sur l&apos;année civile, décompté sur ses jours habituels
+                      uniquement. En Suisse, la loi prévoit au moins{' '}
+                      {LEGAL_VACATION_DAYS_ADULT} jours par an (4 semaines), et{' '}
+                      {LEGAL_VACATION_DAYS_YOUNG} jours (5 semaines) jusqu&apos;à 20 ans
+                      révolus ou pour un apprenti.
+                    </p>
+                  )}
+                </div>
               ) : (
-                <p className="text-[11px] text-slate-400">
-                  L&apos;employé pourra poser autant de jours de vacances sur l&apos;année civile
-                  (jours habituels uniquement).
-                </p>
+                postedVacationDays !== null &&
+                postedVacationDays > 0 && (
+                  <p className="text-[11px] leading-relaxed text-amber-700">
+                    {postedVacationDays} jour{postedVacationDays > 1 ? 's' : ''} de vacances
+                    {postedVacationDays > 1 ? ' sont' : ' est'} déjà posé
+                    {postedVacationDays > 1 ? 's' : ''} pour {new Date().getFullYear()}.
+                    Rien n&apos;est effacé : ces jours restent au planning, et l&apos;employé
+                    peut encore les retirer lui-même.
+                  </p>
+                )
               )}
             </div>
           )}

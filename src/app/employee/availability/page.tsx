@@ -11,7 +11,10 @@ import { ChevronLeft, ChevronRight, Lock, CheckCircle, Clock, XCircle, Send, Ale
 import toast from 'react-hot-toast';
 import type { AvailabilityDay, ContractType } from '@/lib/types';
 import { normalizeContractType } from '@/lib/utils';
-import { AvailabilityStatusIcon } from '@/components/availability/AvailabilityStatusIcon';
+import {
+  AVAILABILITY_EXCEPTION_STYLE,
+  AvailabilityStatusIcon,
+} from '@/components/availability/AvailabilityStatusIcon';
 import {
   formatWorkDaysSummary,
   isEmployeeWorkDay,
@@ -30,12 +33,7 @@ interface AvailabilityEntry {
   status: StoredAvailabilityStatus;
 }
 
-const EXCEPTION_CONFIG: Record<StoredAvailabilityStatus, {
-  label: string; bg: string; text: string; border: string;
-}> = {
-  vacation:    { label: 'Vacances',     bg: '#FEF3C7', text: '#D97706', border: '#FCD34D' },
-  unavailable: { label: 'Indisponible', bg: '#FEE2E2', text: '#DC2626', border: '#FCA5A5' },
-};
+const EXCEPTION_CONFIG = AVAILABILITY_EXCEPTION_STYLE;
 
 // Cycle : fixe = normal → vacances → indispo → normal ; à l’heure = normal ↔ indispo
 const WEEK_DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
@@ -109,13 +107,17 @@ export default function EmployeeAvailabilityPage() {
   const monthKey = format(currentDate, 'yyyy-MM');
   const calendarYear = currentDate.getFullYear();
   const isFixedContract = contractType === 'fixed';
-  const vacationQuotaReached = isFixedContract && yearVacationCount >= annualVacationDays;
-  // Salarié fixe : vacances + indispos. Quota épuisé → on saute l'étape vacances.
+  /**
+   * Quota à 0 : la direction gère les vacances de cet employé en dehors de
+   * l'application. Ce n'est pas la même chose qu'un quota épuisé, et le
+   * message affiché doit le refléter.
+   */
+  const vacationAllowed = isFixedContract && annualVacationDays > 0;
+  const vacationQuotaReached = vacationAllowed && yearVacationCount >= annualVacationDays;
+  // Vacances autorisées et quota restant : vacances + indispos. Sinon indispos seules.
   const availabilityOptions = {
-    mode: (isFixedContract
-      ? vacationQuotaReached
-        ? 'unavailable_only'
-        : 'vacation_and_unavailable'
+    mode: (vacationAllowed && !vacationQuotaReached
+      ? 'vacation_and_unavailable'
       : 'unavailable_only') as AvailabilityExceptionMode,
   };
   // Étapes affichées dans la légende du cycle, dans l'ordre des clics.
@@ -388,10 +390,10 @@ export default function EmployeeAvailabilityPage() {
       {/* ── Résumé exceptions ─────────────────────────────────── */}
       <div
         className={`grid gap-3 animate-stagger-2 w-full mx-auto ${
-          isFixedContract ? 'grid-cols-2 max-w-sm' : 'grid-cols-1 max-w-xs'
+          vacationAllowed ? 'grid-cols-2 max-w-sm' : 'grid-cols-1 max-w-xs'
         }`}
       >
-        {isFixedContract && (
+        {vacationAllowed && (
           <div
             className="rounded-2xl border p-3 text-center transition-all duration-300"
             style={{
@@ -433,11 +435,13 @@ export default function EmployeeAvailabilityPage() {
       </div>
 
       <p className="text-[11px] text-slate-400 text-center -mt-1 animate-stagger-2">
-        {isFixedContract
+        {vacationAllowed
           ? vacationQuotaReached
             ? `Quota de vacances atteint pour ${calendarYear} — vous pouvez encore signaler vos indisponibilités.`
             : 'Salarié fixe : posez vos vacances (dans la limite du quota) et signalez vos indisponibilités.'
-          : "En tant qu'employé à l'heure, vous pouvez signaler vos indisponibilités sans limite."}
+          : isFixedContract
+            ? 'Vos vacances sont gérées directement avec votre responsable. Ici, signalez vos indisponibilités.'
+            : "En tant qu'employé à l'heure, vous pouvez signaler vos indisponibilités sans limite."}
       </p>
 
       {/* ── Calendrier ───────────────────────────────────────── */}
@@ -642,7 +646,7 @@ export default function EmployeeAvailabilityPage() {
         {isLocked
           ? 'Ce mois est verrouillé. Demandez une modification à votre responsable.'
           : workDays.length > 0
-          ? isFixedContract
+          ? vacationAllowed
             ? 'Posez vos vacances (quota annuel) et vos indisponibilités sur vos jours habituels, puis validez avant le début du mois.'
             : 'Signalez vos indisponibilités sur vos jours habituels, puis validez avant le début du mois.'
           : 'En attente de configuration de vos jours habituels par votre responsable.'}
@@ -660,7 +664,7 @@ export default function EmployeeAvailabilityPage() {
               Vos disponibilités pour{' '}
               <strong className="text-slate-700">{format(currentDate, 'MMMM yyyy', { locale: fr })}</strong>{' '}
               seront verrouillées ({workDaysSummary || 'jours habituels'}).
-              {isFixedContract
+              {vacationAllowed
                 ? ' Vos jours de vacances et vos indisponibilités sont enregistrés.'
                 : ' Seules vos indisponibilités sont enregistrées.'}
               Pour les modifier ensuite, il faudra en faire la demande.
